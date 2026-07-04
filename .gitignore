@@ -1,0 +1,10 @@
+.idea/
+.DS_Store
+app/build/
+# Real configs contain credentials; only config.example.yaml is tracked
+config.yaml
+config.test.yaml
+# HAP pairing state (persisted at runtime)
+hap/
+hap-test/
+*.hap

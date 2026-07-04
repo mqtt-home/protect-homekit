@@ -1,0 +1,54 @@
+# protect-homekit example configuration.
+# Values in ${NAME} syntax are replaced with environment variables.
+
+loglevel: info
+
+protect:
+  # UniFi OS console running Protect (UDM, UNVR, CloudKey Gen2+, ...)
+  host: https://192.168.1.1
+  # Use a dedicated LOCAL user (not a Ubiquiti cloud account, no 2FA).
+  # Admin rights are only needed for cameras.auto_enable_rtsp.
+  username: ${PROTECT_USERNAME}
+  password: ${PROTECT_PASSWORD}
+  # Consoles use self-signed certificates by default.
+  verify_ssl: false
+
+homekit:
+  bridge_name: Protect HomeKit
+  pin: "031-45-154"
+  # storage_dir holds the HomeKit pairing state. It MUST survive restarts
+  # (persistent volume in Kubernetes), otherwise the bridge unpairs itself.
+  # Defaults to "<config-dir>/hap".
+  # storage_dir: /var/lib/protect-homekit/hap
+  # Fixed HAP port, e.g. for hostNetwork + firewall setups. 0 = random.
+  # port: 21063
+  # Restrict mDNS announcements to specific interfaces on multi-homed hosts.
+  # interfaces: ["eth0"]
+
+cameras:
+  # Limit / exclude cameras by Protect name, id or MAC. Empty include = all.
+  # include: ["Front Door", "Garden"]
+  # exclude: ["Garage"]
+  # Expose Protect motion events as HomeKit motion sensors (default: true).
+  motion_sensors: true
+  # Automatically enable the RTSPS streams in Protect when they are off
+  # (default: true, requires an admin user). When disabled, enable RTSP per
+  # camera in the Protect UI under Camera > Settings > Advanced.
+  auto_enable_rtsp: true
+  # Switch cameras using "enhanced encoding" (H.265) to Standard/H.264.
+  # HomeKit can only stream H.264 and this bridge never transcodes video.
+  # Note: also affects Protect recordings (H.264 needs more storage).
+  # Default: true.
+  force_h264: true
+
+ffmpeg:
+  # Path to the ffmpeg binary (default: "ffmpeg" from $PATH).
+  # path: /usr/bin/ffmpeg
+  # Transcode camera audio (AAC) to Opus for HomeKit; video is never
+  # transcoded. Disable for video-only streams (default: true).
+  audio: true
+  # Log the full ffmpeg command lines and output.
+  debug: false
+
+pprof:
+  enabled: false
