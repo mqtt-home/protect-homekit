@@ -1,0 +1,4 @@
+# pnpm 11 blocks dependency build scripts by default; allow esbuild's so the
+# vite build works.
+allowBuilds:
+  esbuild: true

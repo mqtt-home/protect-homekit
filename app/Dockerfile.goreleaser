@@ -4,6 +4,7 @@ RUN apk add --no-cache ffmpeg tzdata && \
     adduser -D -H -u 1000 protect
 
 COPY protect-homekit /protect-homekit
+COPY web/dist /web/dist
 
 USER protect
 

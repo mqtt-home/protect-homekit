@@ -18,6 +18,8 @@ for small hosts like a Raspberry Pi running Kubernetes.
 - **Doorbells** (G4 Doorbell etc.) appear as HomeKit video doorbells and ring
   in the Home app.
 - Automatic RTSPS stream activation in Protect (optional).
+- **Web UI** with live camera overview (snapshots, motion, ring events via
+  SSE) and the HomeKit pairing QR code.
 - Stable accessory IDs derived from the Protect camera id — adding/removing
   cameras never breaks existing HomeKit rooms or automations.
 - Single static binary + ffmpeg; multi-arch Docker image (amd64/arm64).

@@ -10,8 +10,8 @@ import (
 	"github.com/brutella/hap/rtp"
 	"github.com/brutella/hap/service"
 	"github.com/brutella/hap/tlv8"
-	"github.com/philipparndt/go-logger"
 	"github.com/mqtt-home/protect-homekit/protect"
+	"github.com/philipparndt/go-logger"
 )
 
 // CameraAccessory is one Protect camera exposed to HomeKit: live stream,

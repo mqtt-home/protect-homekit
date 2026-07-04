@@ -9,10 +9,11 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/philipparndt/go-logger"
 	"github.com/mqtt-home/protect-homekit/bridge"
 	"github.com/mqtt-home/protect-homekit/config"
 	"github.com/mqtt-home/protect-homekit/version"
+	"github.com/mqtt-home/protect-homekit/web"
+	"github.com/philipparndt/go-logger"
 )
 
 func main() {
@@ -42,9 +43,26 @@ func main() {
 	initPprof(cfg.Pprof)
 
 	b := bridge.New(cfg)
+
+	var webServer *web.WebServer
+	if cfg.Web.Enabled {
+		webServer = web.NewWebServer(b, cfg.Web)
+		b.SetUpdateListener(webServer.BroadcastCamera)
+	}
+
 	if err := b.Start(); err != nil {
 		logger.Error("Failed to start bridge", "error", err)
 		os.Exit(1)
+	}
+
+	if webServer != nil {
+		go func() {
+			port := cfg.Web.Port
+			logger.Info("Web interface available", "url", "http://localhost:"+strconv.Itoa(port))
+			if err := webServer.Start(port); err != nil {
+				logger.Error("Failed to start web server", "error", err)
+			}
+		}()
 	}
 
 	logger.Info("Application ready")

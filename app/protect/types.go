@@ -26,22 +26,22 @@ type Ports struct {
 }
 
 type Camera struct {
-	ID               string       `json:"id"`
-	Name             string       `json:"name"`
-	Type             string       `json:"type"`
-	Mac              string       `json:"mac"`
-	Host             string       `json:"host"`
-	State            string       `json:"state"` // "CONNECTED" when online
-	FirmwareVersion  string       `json:"firmwareVersion"`
-	IsMicEnabled     bool         `json:"isMicEnabled"`
-	IsMotionDetected bool         `json:"isMotionDetected"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Type             string `json:"type"`
+	Mac              string `json:"mac"`
+	Host             string `json:"host"`
+	State            string `json:"state"` // "CONNECTED" when online
+	FirmwareVersion  string `json:"firmwareVersion"`
+	IsMicEnabled     bool   `json:"isMicEnabled"`
+	IsMotionDetected bool   `json:"isMotionDetected"`
 	// VideoCodec is "h264" or "h265" (Protect "enhanced encoding"). HomeKit
 	// streaming only supports H.264.
-	VideoCodec string `json:"videoCodec"`
-	LastMotion       int64        `json:"lastMotion"`
-	LastRing         int64        `json:"lastRing"`
-	FeatureFlags     FeatureFlags `json:"featureFlags"`
-	Channels         []Channel    `json:"channels"`
+	VideoCodec   string       `json:"videoCodec"`
+	LastMotion   int64        `json:"lastMotion"`
+	LastRing     int64        `json:"lastRing"`
+	FeatureFlags FeatureFlags `json:"featureFlags"`
+	Channels     []Channel    `json:"channels"`
 	// ChannelsRaw preserves the untouched channel objects so an RTSP-enable
 	// PATCH can send them back without dropping fields this bridge doesn't
 	// model.

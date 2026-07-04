@@ -4,6 +4,7 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - sh -c "cd web && npm install -g pnpm@11.5.1 && pnpm install --frozen-lockfile && pnpm run build"
 
 builds:
   - id: protect-homekit
@@ -28,6 +29,8 @@ dockers:
     goarch: amd64
     build_flag_templates:
       - "--platform=linux/amd64"
+    extra_files:
+      - web/dist/
     skip_push: false
 
   - image_templates:
@@ -38,6 +41,8 @@ dockers:
     goarch: arm64
     build_flag_templates:
       - "--platform=linux/arm64"
+    extra_files:
+      - web/dist/
     skip_push: false
 
 docker_manifests:

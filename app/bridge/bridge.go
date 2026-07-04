@@ -16,10 +16,10 @@ import (
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
 	hlog "github.com/brutella/hap/log"
-	"github.com/philipparndt/go-logger"
 	"github.com/mqtt-home/protect-homekit/config"
 	"github.com/mqtt-home/protect-homekit/protect"
 	"github.com/mqtt-home/protect-homekit/version"
+	"github.com/philipparndt/go-logger"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -54,6 +54,35 @@ type Bridge struct {
 
 	snapMu    sync.Mutex
 	snapshots map[string]cachedSnapshot
+
+	// onUpdate is fired with fresh camera state (web UI live updates).
+	onUpdate func(CameraInfo)
+}
+
+// CameraInfo is a read-only snapshot of one camera's state for the web UI.
+type CameraInfo struct {
+	Type       string        `json:"type"` // SSE event discriminator, always "camera"
+	AID        uint64        `json:"aid"`
+	ID         string        `json:"id"`
+	Name       string        `json:"name"`
+	Model      string        `json:"model"`
+	Mac        string        `json:"mac"`
+	Firmware   string        `json:"firmware"`
+	Online     bool          `json:"online"`
+	Motion     bool          `json:"motion"`
+	LastMotion int64         `json:"last_motion"`
+	LastRing   int64         `json:"last_ring"`
+	Doorbell   bool          `json:"doorbell"`
+	Codec      string        `json:"codec"`
+	Channels   []ChannelInfo `json:"channels"`
+}
+
+type ChannelInfo struct {
+	Name   string `json:"name"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	FPS    int    `json:"fps"`
+	RTSP   bool   `json:"rtsp"`
 }
 
 type cachedSnapshot struct {
@@ -164,6 +193,94 @@ func (b *Bridge) Start() error {
 	b.logPairingInfo()
 	logger.Info("protect-homekit bridge started", "cameras", len(b.cameras))
 	return nil
+}
+
+// SetUpdateListener registers a callback fired whenever a camera's state
+// changes (used by the web UI). Must be called before Start.
+func (b *Bridge) SetUpdateListener(fn func(CameraInfo)) { b.onUpdate = fn }
+
+func (b *Bridge) BridgeName() string { return b.cfg.HomeKit.BridgeName }
+func (b *Bridge) Pin() string        { return b.cfg.HomeKit.Pin }
+func (b *Bridge) SetupID() string    { return b.cfg.HomeKit.SetupID }
+func (b *Bridge) Healthy() bool      { return b.server != nil }
+
+// SetupURI returns the X-HM:// pairing payload encoded in the HomeKit QR code.
+func (b *Bridge) SetupURI() string {
+	return setupURI(b.cfg.HomeKit.Pin, categoryBridge, b.cfg.HomeKit.SetupID)
+}
+
+// NVRInfo returns name and version of the connected Protect console.
+func (b *Bridge) NVRInfo() (string, string) {
+	b.stateMu.RLock()
+	defer b.stateMu.RUnlock()
+	if b.bootstrap == nil {
+		return "", ""
+	}
+	return b.bootstrap.NVR.Name, b.bootstrap.NVR.Version
+}
+
+// CameraInfos returns the current state of all bridged cameras.
+func (b *Bridge) CameraInfos() []CameraInfo {
+	b.stateMu.RLock()
+	defer b.stateMu.RUnlock()
+	out := make([]CameraInfo, 0, len(b.cameras))
+	for id, acc := range b.cameras {
+		out = append(out, b.cameraInfoLocked(id, acc))
+	}
+	return out
+}
+
+// cameraInfoLocked builds the web payload; callers hold stateMu.
+func (b *Bridge) cameraInfoLocked(id string, acc *CameraAccessory) CameraInfo {
+	cam := b.camState[id]
+	info := CameraInfo{
+		Type:       "camera",
+		AID:        acc.Id,
+		ID:         id,
+		Name:       cam.Name,
+		Model:      cam.Type,
+		Mac:        cam.Mac,
+		Firmware:   cam.FirmwareVersion,
+		Online:     cam.Connected(),
+		Motion:     cam.IsMotionDetected,
+		LastMotion: cam.LastMotion,
+		LastRing:   cam.LastRing,
+		Doorbell:   cam.IsDoorbell(),
+		Codec:      cam.VideoCodec,
+	}
+	for _, ch := range cam.Channels {
+		if !ch.Enabled {
+			continue
+		}
+		info.Channels = append(info.Channels, ChannelInfo{
+			Name: ch.Name, Width: ch.Width, Height: ch.Height, FPS: ch.FPS, RTSP: ch.IsRtspEnabled,
+		})
+	}
+	return info
+}
+
+// CameraSnapshot returns a JPEG for the web UI (shares the HomeKit snapshot
+// cache).
+func (b *Bridge) CameraSnapshot(id string, width, height int) ([]byte, error) {
+	if _, ok := b.cameras[id]; !ok {
+		return nil, fmt.Errorf("unknown camera %s", id)
+	}
+	return b.snapshot(id, width, height)
+}
+
+// notifyUpdate pushes fresh state for one camera to the web UI.
+func (b *Bridge) notifyUpdate(id string) {
+	if b.onUpdate == nil {
+		return
+	}
+	acc, ok := b.cameras[id]
+	if !ok {
+		return
+	}
+	b.stateMu.RLock()
+	info := b.cameraInfoLocked(id, acc)
+	b.stateMu.RUnlock()
+	b.onUpdate(info)
 }
 
 // Stop shuts down streams, the event stream and the HAP server. Waiting for
@@ -321,6 +438,7 @@ func (b *Bridge) onBootstrap(bs *protect.Bootstrap) {
 	for _, cam := range bs.Cameras {
 		if acc, ok := b.cameras[cam.ID]; ok {
 			acc.syncState(cam)
+			b.notifyUpdate(cam.ID)
 		}
 	}
 }
@@ -358,6 +476,8 @@ func (b *Bridge) onCameraUpdate(cameraID string, patch protect.CameraPatch) {
 		b.camState[cameraID] = cam
 	}
 	b.stateMu.Unlock()
+
+	b.notifyUpdate(cameraID)
 }
 
 // resourceRequest is the HAP snapshot request body (HAP spec 11.5).

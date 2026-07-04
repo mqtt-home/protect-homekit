@@ -1,6 +1,9 @@
 .idea/
 .DS_Store
 app/build/
+app/web/dist/
+app/web/node_modules/
+app/web/*.tsbuildinfo
 # Real configs contain credentials; only config.example.yaml is tracked
 config.yaml
 config.test.yaml

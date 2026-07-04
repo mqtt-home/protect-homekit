@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/philipparndt/go-logger"
 	"github.com/mqtt-home/protect-homekit/config"
 	"github.com/mqtt-home/protect-homekit/protect"
+	"github.com/philipparndt/go-logger"
 )
 
 func main() {

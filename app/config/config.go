@@ -17,8 +17,20 @@ type Config struct {
 	HomeKit  HomeKitConfig `json:"homekit"`
 	Cameras  CamerasConfig `json:"cameras"`
 	FFmpeg   FFmpegConfig  `json:"ffmpeg"`
+	Web      WebConfig     `json:"web"`
 	Pprof    PprofConfig   `json:"pprof"`
 	LogLevel string        `json:"loglevel,omitempty"`
+}
+
+// WebConfig enables the status/monitoring web UI (camera overview, pairing
+// QR code, SSE live updates).
+type WebConfig struct {
+	Enabled bool `json:"enabled"`
+	// Port defaults to 8080.
+	Port int `json:"port,omitempty"`
+	// LivenessGraceSeconds is how long /api/livez keeps reporting OK while
+	// the bridge is unhealthy (restart dampening). Defaults to 4 minutes.
+	LivenessGraceSeconds int `json:"liveness_grace_seconds,omitempty"`
 }
 
 // ProtectConfig points at the UniFi OS console running Protect (e.g. a
@@ -201,6 +213,9 @@ func LoadConfig(file string) (Config, error) {
 	}
 	if cfg.FFmpeg.Path == "" {
 		cfg.FFmpeg.Path = "ffmpeg"
+	}
+	if cfg.Web.Port == 0 {
+		cfg.Web.Port = 8080
 	}
 	if cfg.Pprof.Port == 0 {
 		cfg.Pprof.Port = 6060

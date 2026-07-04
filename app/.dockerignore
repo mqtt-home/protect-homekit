@@ -1,3 +1,5 @@
 build/
 *.md
 .goreleaser.yml
+web/node_modules/
+web/dist/
