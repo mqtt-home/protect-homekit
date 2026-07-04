@@ -33,3 +33,5 @@ require (
 	gopkg.in/Regis24GmbH/go-diacritics.v2 v2.0.3 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 )
+
+replace github.com/brutella/dnssd => ./third_party/dnssd
