@@ -23,6 +23,12 @@ traffic on a home network).
    this service.
 3. **service.go** — `ipsAtInterfaceCached()`: caches `iface.Addrs()` results
    per interface name for 60s.
+4. **service.go** — `MulticastInterfaces()`: caches the enumerated interface
+   list for 60s. It runs on the per-packet path via `Service.Interfaces()` /
+   `HasIPOnAnyInterface()` (`filterRecords` calls it for A/AAAA records that
+   match our own hostname — including our own looped-back announcements,
+   since dnssd enables multicast loopback) and did a `net.Interfaces()` dump
+   plus one `iface.Addrs()` dump per interface on every call.
 
 Interface/address changes are picked up after at most 60s, which is well
 below mDNS record TTLs; dnssd additionally re-announces on netlink link

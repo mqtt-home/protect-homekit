@@ -504,8 +504,39 @@ func parseHostname(str string) (name string, domain string) {
 	return
 }
 
+// multicastIfacesCache caches MulticastInterfaces results, because
+// enumerating interfaces and their addresses hits the kernel (netlink
+// dumps on Linux) and this runs on the per-packet request path via
+// Service.Interfaces / HasIPOnAnyInterface. Entries expire after
+// ifaceCacheTTL (see mdns.go).
+var multicastIfacesCache = struct {
+	sync.Mutex
+	ifaces  map[string][]*net.Interface
+	fetched map[string]time.Time
+}{
+	ifaces:  map[string][]*net.Interface{},
+	fetched: map[string]time.Time{},
+}
+
 // MulticastInterfaces returns a list of all active multicast network interfaces.
 func MulticastInterfaces(filters ...string) []*net.Interface {
+	key := strings.Join(filters, ",")
+
+	multicastIfacesCache.Lock()
+	defer multicastIfacesCache.Unlock()
+
+	if ifaces, ok := multicastIfacesCache.ifaces[key]; ok && time.Since(multicastIfacesCache.fetched[key]) < ifaceCacheTTL {
+		return ifaces
+	}
+
+	ifaces := multicastInterfaces(filters...)
+	multicastIfacesCache.ifaces[key] = ifaces
+	multicastIfacesCache.fetched[key] = time.Now()
+
+	return ifaces
+}
+
+func multicastInterfaces(filters ...string) []*net.Interface {
 	var tmp []*net.Interface
 	ifaces, err := net.Interfaces()
 	if err != nil {
