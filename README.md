@@ -19,7 +19,9 @@ for small hosts like a Raspberry Pi running Kubernetes.
   in the Home app.
 - Automatic RTSPS stream activation in Protect (optional).
 - **Web UI** with live camera overview (snapshots, motion, ring events via
-  SSE) and the HomeKit pairing QR code.
+  SSE) and the HomeKit pairing QR code. Click a camera for a live video
+  stream (fMP4 over websocket into the MediaSource API — remuxed, not
+  transcoded, like the HomeKit streams).
 - Stable accessory IDs derived from the Protect camera id — adding/removing
   cameras never breaks existing HomeKit rooms or automations.
 - Single static binary + ffmpeg; multi-arch Docker image (amd64/arm64).

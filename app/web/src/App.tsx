@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { liveSupported, startLive, type LiveSession } from './live'
 
 const API = './api'
 
@@ -95,18 +96,53 @@ function CameraCard({ camera }: { camera: Camera }) {
     if (camera.motion) setTick(Date.now())
   }, [camera.motion, camera.last_motion])
 
+  // Live playback: click the tile to start/stop the fMP4 stream.
+  const [live, setLive] = useState(false)
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const sessionRef = useRef<LiveSession | null>(null)
+
+  useEffect(() => {
+    if (!live || !videoRef.current) return
+    setLiveError(null)
+    const session = startLive(videoRef.current, camera.id, (message) => {
+      setLiveError(message)
+      setLive(false)
+    })
+    sessionRef.current = session
+    return () => {
+      session.stop()
+      sessionRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, camera.id])
+
+  const toggleLive = () => {
+    if (!camera.online) return
+    if (!liveSupported()) {
+      setLiveError('live view not supported in this browser')
+      return
+    }
+    setLive((v) => !v)
+  }
+
   const best = camera.channels.find((c) => c.rtsp) ?? camera.channels[0]
 
   return (
     <div className={`card ${camera.motion ? 'card-motion' : ''}`}>
-      <div className="snapshot">
-        {camera.online ? (
+      <div className={`snapshot ${camera.online ? 'clickable' : ''}`} onClick={toggleLive} title={live ? 'Stop live view' : 'Start live view'}>
+        {live ? (
+          <video ref={videoRef} muted autoPlay playsInline />
+        ) : camera.online ? (
           <img src={`${API}/cameras/${camera.id}/snapshot?w=640&t=${tick}`} alt={camera.name} loading="lazy" />
         ) : (
           <div className="offline-placeholder">offline</div>
         )}
+        {live && <span className="badge badge-live">LIVE</span>}
+        {!live && camera.online && <span className="play-hint">▶</span>}
         {camera.motion && <span className="badge badge-motion">MOTION</span>}
         {!camera.online && <span className="badge badge-offline">OFFLINE</span>}
+        {liveError && !live && <span className="live-error">{liveError}</span>}
       </div>
       <div className="card-body">
         <div className="card-title">

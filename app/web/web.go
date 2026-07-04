@@ -72,6 +72,7 @@ func (ws *WebServer) setupRoutes() {
 		r.Get("/info", ws.info)
 		r.Get("/cameras", ws.cameras)
 		r.Get("/cameras/{id}/snapshot", ws.snapshot)
+		r.Get("/cameras/{id}/live", ws.live)
 		r.Get("/qr", ws.qr)
 		r.Get("/events", ws.handleSSE)
 	})

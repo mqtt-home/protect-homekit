@@ -112,11 +112,48 @@ button:hover {
   background: #000;
 }
 
-.snapshot img {
+.snapshot img,
+.snapshot video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.snapshot.clickable {
+  cursor: pointer;
+}
+
+.play-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.9rem;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.snapshot.clickable:hover .play-hint {
+  opacity: 1;
+}
+
+.badge-live {
+  background: var(--ok);
+  color: #fff;
+}
+
+.live-error {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--motion);
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  border-radius: 6px;
 }
 
 .offline-placeholder {
