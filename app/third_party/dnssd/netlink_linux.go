@@ -96,7 +96,10 @@ func (r *responder) servedIfacesFingerprint() string {
 	srvs := services(r.managed)
 	r.mutex.Unlock()
 
-	snap := getIfaceSnapshot()
+	// Force a fresh view here: this runs only after the debounce, so it
+	// is cheap, and the announce decision must not be made on a snapshot
+	// that predates the event that woke us.
+	snap := getIfaceSnapshotFresh()
 
 	seen := map[string]bool{}
 	entries := []string{}

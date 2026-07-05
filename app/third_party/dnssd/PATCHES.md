@@ -59,9 +59,20 @@ re-announce of all services on every netlink link flap.
    (matching upstream's existing handling of hostname conflicts), so a later
    response without SRV records can't clear it before the rename fires.
 
-Interface/address changes are picked up via netlink events (Linux) or after
-at most 60s (other platforms, snapshot TTL), both well below mDNS record
-TTLs.
+A netlink event marks the snapshot dirty rather than dropping it, and a
+dirty rebuild on the per-packet path happens at most once per
+`ifaceSnapEventRefresh` (5s). This matters on a `hostNetwork` pod, which
+sees every container/veth event on the node: without the limit a burst
+of events would force a full kernel dump on the next mDNS packet each
+time. The debounced re-announce path uses `getIfaceSnapshotFresh` to
+bypass the limit, since it runs at most once per debounce window and
+must decide on an accurate view. Measured under a 200-event storm with
+~5900 mDNS packets, this cut per-packet-path rebuild allocations (`interfaceByIndexCached`) ~89% and netlink dumps ~69% versus dropping the
+snapshot on every event.
+
+Interface/address changes are picked up via netlink events (Linux, within
+~5s under sustained churn) or after at most 60s (other platforms, snapshot
+TTL), both well below mDNS record TTLs.
 
 Also removed: the upstream `cmd/` directory (example binaries, not needed).
 

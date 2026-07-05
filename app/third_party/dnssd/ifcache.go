@@ -17,15 +17,26 @@ import (
 // The snapshot is rebuilt when:
 //   - it is older than its TTL (60s by default; raised on Linux once
 //     the netlink event subscription is active, see netlink_linux.go),
-//   - it has been invalidated by a netlink link/addr update event, or
+//   - a netlink link/addr event marked it dirty AND the last rebuild was
+//     more than ifaceSnapEventRefresh ago. On a busy host (e.g. a
+//     hostNetwork pod that sees every container/veth event) events can
+//     arrive faster than mDNS packets; without this rate limit each
+//     event would force the next packet to redo a full kernel dump. The
+//     stale snapshot keeps being served until the interval elapses, so
+//     changes are still picked up within a few seconds.
 //   - a by-index/by-name lookup misses (e.g. first packet from a
 //     just-created interface) and the snapshot is older than
 //     ifaceSnapMissRefresh. The rate limit keeps packets with bogus
 //     interface indexes from forcing per-packet kernel dumps.
+//
+// The re-announce path (netlink_linux.go) uses getIfaceSnapshotFresh to
+// bypass the rate limit; it is already debounced, so an accurate view
+// matters more there than rebuild frequency.
 const (
-	ifaceSnapDefaultTTL  = 60 * time.Second
-	ifaceSnapEventTTL    = 15 * time.Minute
-	ifaceSnapMissRefresh = 5 * time.Second
+	ifaceSnapDefaultTTL   = 60 * time.Second
+	ifaceSnapEventTTL     = 15 * time.Minute
+	ifaceSnapMissRefresh  = 5 * time.Second
+	ifaceSnapEventRefresh = 5 * time.Second
 )
 
 type ifaceSnapshot struct {
@@ -42,6 +53,7 @@ var ifaceSnap = struct {
 	snap    *ifaceSnapshot
 	fetched time.Time
 	ttl     time.Duration
+	dirty   bool // a netlink event arrived; rebuild is due (rate-limited)
 }{
 	ttl: ifaceSnapDefaultTTL,
 }
@@ -91,12 +103,27 @@ func buildIfaceSnapshot() *ifaceSnapshot {
 	return snap
 }
 
-// ifaceSnapshotLocked returns the current snapshot, rebuilding it if it
-// is missing or expired. ifaceSnap must be locked by the caller.
+// rebuildIfaceSnapshotLocked rebuilds the snapshot now and clears the
+// dirty flag. ifaceSnap must be locked by the caller.
+func rebuildIfaceSnapshotLocked() *ifaceSnapshot {
+	ifaceSnap.snap = buildIfaceSnapshot()
+	ifaceSnap.fetched = time.Now()
+	ifaceSnap.dirty = false
+	return ifaceSnap.snap
+}
+
+// ifaceSnapshotLocked returns the current snapshot for the per-packet
+// path. It rebuilds when the snapshot is missing, when the TTL safety
+// net has expired, or when a netlink event marked it dirty — but a
+// dirty rebuild happens at most once per ifaceSnapEventRefresh, so a
+// storm of events on a busy (e.g. hostNetwork) host cannot force a
+// kernel interface dump per received mDNS packet. ifaceSnap must be
+// locked by the caller.
 func ifaceSnapshotLocked() *ifaceSnapshot {
-	if ifaceSnap.snap == nil || time.Since(ifaceSnap.fetched) >= ifaceSnap.ttl {
-		ifaceSnap.snap = buildIfaceSnapshot()
-		ifaceSnap.fetched = time.Now()
+	if ifaceSnap.snap == nil ||
+		time.Since(ifaceSnap.fetched) >= ifaceSnap.ttl ||
+		(ifaceSnap.dirty && time.Since(ifaceSnap.fetched) >= ifaceSnapEventRefresh) {
+		return rebuildIfaceSnapshotLocked()
 	}
 	return ifaceSnap.snap
 }
@@ -107,12 +134,27 @@ func getIfaceSnapshot() *ifaceSnapshot {
 	return ifaceSnapshotLocked()
 }
 
-// invalidateIfaceSnapshot drops the cached interface table so the next
-// lookup rebuilds it. Called on netlink link/addr update events.
+// getIfaceSnapshotFresh forces a rebuild when the snapshot is dirty,
+// bypassing the per-packet rate limit. Used by the re-announce path,
+// which is already debounced (so it runs at most once per few seconds)
+// and needs an accurate view to decide whether interfaces changed.
+func getIfaceSnapshotFresh() *ifaceSnapshot {
+	ifaceSnap.Lock()
+	defer ifaceSnap.Unlock()
+	if ifaceSnap.snap == nil || ifaceSnap.dirty {
+		return rebuildIfaceSnapshotLocked()
+	}
+	return ifaceSnap.snap
+}
+
+// invalidateIfaceSnapshot marks the cached interface table stale so it
+// is rebuilt on the next access (rate-limited on the per-packet path).
+// The current snapshot keeps being served until then. Called on netlink
+// link/addr update events.
 func invalidateIfaceSnapshot() {
 	ifaceSnap.Lock()
 	defer ifaceSnap.Unlock()
-	ifaceSnap.snap = nil
+	ifaceSnap.dirty = true
 }
 
 // extendIfaceSnapshotTTL raises the snapshot TTL once event-driven
@@ -129,9 +171,7 @@ func refreshOnMissLocked() *ifaceSnapshot {
 	if time.Since(ifaceSnap.fetched) < ifaceSnapMissRefresh {
 		return nil
 	}
-	ifaceSnap.snap = buildIfaceSnapshot()
-	ifaceSnap.fetched = time.Now()
-	return ifaceSnap.snap
+	return rebuildIfaceSnapshotLocked()
 }
 
 func interfaceByIndexCached(index int) (*net.Interface, error) {
