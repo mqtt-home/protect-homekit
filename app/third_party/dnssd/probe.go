@@ -146,8 +146,9 @@ func probe(ctx context.Context, conn MDNSConn, service Service) (conflict probeC
 			}
 
 			// If the service instance name is already taken from another host,
-			// we have a service instance name conflict
-			conflict.serviceName = len(reqSRVs) > 0
+			// we have a service instance name conflict. Keep a conflict
+			// sticky: a later response without SRV records must not reset it.
+			conflict.serviceName = conflict.serviceName || len(reqSRVs) > 0
 
 		case <-ctx.Done():
 			err = ctx.Err()
