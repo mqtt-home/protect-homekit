@@ -9,49 +9,8 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
-
-// ifaceAddrsCache caches the IP addresses per interface name, because
-// iface.Addrs() queries the kernel (a netlink dump on Linux) on every
-// call. Entries expire after ifaceCacheTTL (see mdns.go).
-var ifaceAddrsCache = struct {
-	sync.Mutex
-	ips     map[string][]net.IP
-	fetched map[string]time.Time
-}{
-	ips:     map[string][]net.IP{},
-	fetched: map[string]time.Time{},
-}
-
-func ipsAtInterfaceCached(iface *net.Interface) []net.IP {
-	ifaceAddrsCache.Lock()
-	defer ifaceAddrsCache.Unlock()
-
-	if ips, ok := ifaceAddrsCache.ips[iface.Name]; ok && time.Since(ifaceAddrsCache.fetched[iface.Name]) < ifaceCacheTTL {
-		return ips
-	}
-
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return []net.IP{}
-	}
-
-	ips := []net.IP{}
-	for _, addr := range addrs {
-		if ip, _, err := net.ParseCIDR(addr.String()); err == nil {
-			ips = append(ips, ip)
-		} else {
-			log.Debug.Println(err)
-		}
-	}
-
-	ifaceAddrsCache.ips[iface.Name] = ips
-	ifaceAddrsCache.fetched[iface.Name] = time.Now()
-
-	return ips
-}
 
 type Config struct {
 	// Name of the service.
@@ -221,7 +180,7 @@ func (s *Service) Interfaces() []*net.Interface {
 	if len(s.Ifaces) > 0 {
 		ifis := []*net.Interface{}
 		for _, name := range s.Ifaces {
-			if ifi, err := net.InterfaceByName(name); err == nil {
+			if ifi, err := interfaceByNameCached(name); err == nil {
 				ifis = append(ifis, ifi)
 			}
 		}
@@ -502,75 +461,6 @@ func parseHostname(str string) (name string, domain string) {
 	}
 
 	return
-}
-
-// multicastIfacesCache caches MulticastInterfaces results, because
-// enumerating interfaces and their addresses hits the kernel (netlink
-// dumps on Linux) and this runs on the per-packet request path via
-// Service.Interfaces / HasIPOnAnyInterface. Entries expire after
-// ifaceCacheTTL (see mdns.go).
-var multicastIfacesCache = struct {
-	sync.Mutex
-	ifaces  map[string][]*net.Interface
-	fetched map[string]time.Time
-}{
-	ifaces:  map[string][]*net.Interface{},
-	fetched: map[string]time.Time{},
-}
-
-// MulticastInterfaces returns a list of all active multicast network interfaces.
-func MulticastInterfaces(filters ...string) []*net.Interface {
-	key := strings.Join(filters, ",")
-
-	multicastIfacesCache.Lock()
-	defer multicastIfacesCache.Unlock()
-
-	if ifaces, ok := multicastIfacesCache.ifaces[key]; ok && time.Since(multicastIfacesCache.fetched[key]) < ifaceCacheTTL {
-		return ifaces
-	}
-
-	ifaces := multicastInterfaces(filters...)
-	multicastIfacesCache.ifaces[key] = ifaces
-	multicastIfacesCache.fetched[key] = time.Now()
-
-	return ifaces
-}
-
-func multicastInterfaces(filters ...string) []*net.Interface {
-	var tmp []*net.Interface
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-
-	for _, iface := range ifaces {
-		iface := iface
-		if (iface.Flags & net.FlagUp) == 0 {
-			continue
-		}
-
-		if (iface.Flags & net.FlagMulticast) == 0 {
-			continue
-		}
-
-		if !containsIfaces(iface.Name, filters) {
-			continue
-		}
-
-		// check for a valid ip at that interface
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			if _, _, err := net.ParseCIDR(addr.String()); err == nil {
-				tmp = append(tmp, &iface)
-				break
-			}
-		}
-	}
-
-	return tmp
 }
 
 func containsIfaces(iface string, filters []string) bool {

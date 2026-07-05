@@ -179,8 +179,11 @@ func filterRecords(req *Request, service *Service) []dns.RR {
 	for _, answer := range all {
 		switch rr := answer.(type) {
 		case *dns.SRV:
-			if rr.Target == service.Hostname() {
-				// Ignore records coming from ourself
+			if rr.Target == service.Hostname() && rr.Port == uint16(service.Port) {
+				// Ignore records coming from ourself. Only an SRV with
+				// identical rdata (target and port) is "ourself" — an SRV
+				// with our hostname but a different port is another
+				// registrant on the same host and a real conflict.
 				continue
 			}
 			if rr.Hdr.Name != service.EscapedServiceInstanceName() {

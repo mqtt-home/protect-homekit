@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/brutella/dnssd/log"
@@ -12,41 +11,6 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
-
-// ifaceCacheTTL bounds how long cached interface lookups are served.
-// On Linux, net.InterfaceByIndex dumps the whole interface table via
-// netlink on every call; resolving it per received mDNS packet dominates
-// CPU usage on busy networks. Interface changes are picked up after at
-// most this long, which is well below mDNS record TTLs.
-const ifaceCacheTTL = 60 * time.Second
-
-var ifaceCache = struct {
-	sync.Mutex
-	byIndex map[int]*net.Interface
-	fetched map[int]time.Time
-}{
-	byIndex: map[int]*net.Interface{},
-	fetched: map[int]time.Time{},
-}
-
-func interfaceByIndexCached(index int) (*net.Interface, error) {
-	ifaceCache.Lock()
-	defer ifaceCache.Unlock()
-
-	if iface, ok := ifaceCache.byIndex[index]; ok && time.Since(ifaceCache.fetched[index]) < ifaceCacheTTL {
-		return iface, nil
-	}
-
-	iface, err := net.InterfaceByIndex(index)
-	if err != nil {
-		return nil, err
-	}
-
-	ifaceCache.byIndex[index] = iface
-	ifaceCache.fetched[index] = time.Now()
-
-	return iface, nil
-}
 
 var (
 	// IPv4LinkLocalMulticast is the IPv4 link-local multicast address.
@@ -577,19 +541,17 @@ func isUnicastQuestion(q dns.Question) bool {
 }
 
 func getInterfaceByIp(ip net.IP) (*net.Interface, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
+	snap := getIfaceSnapshot()
 
-	for _, iface := range interfaces {
+	for i := range snap.ifaces {
+		iface := &snap.ifaces[i]
 		// check interface running flag
-		if iface.Flags&net.FlagRunning != 0 {
-			addrs, _ := iface.Addrs()
-			for _, addr := range addrs {
-				if ipnet, ok := addr.(*net.IPNet); ok && ipnet.Contains(ip) {
-					return &iface, nil
-				}
+		if iface.Flags&net.FlagRunning == 0 {
+			continue
+		}
+		for _, ipnet := range snap.nets[iface.Name] {
+			if ipnet.Contains(ip) {
+				return iface, nil
 			}
 		}
 	}
