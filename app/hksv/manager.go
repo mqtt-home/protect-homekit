@@ -126,10 +126,13 @@ func (m *Manager) advertiseSupported() {
 
 	m.Recording.SupportedCamera.SetValue(
 		buildSupportedCameraRecordingConfiguration(m.opts.PrebufferMS, m.opts.FragmentMS, triggers))
+	// Recording advertises only High profile / Level 4.0, matching real HKSV
+	// cameras (offering the lower profiles here can confuse the controller's
+	// recording negotiation).
 	m.Recording.SupportedVideo.SetValue(
 		buildSupportedVideoRecordingConfiguration(
-			[]byte{H264ProfileBaseline, H264ProfileMain, H264ProfileHigh},
-			[]byte{H264Level31, H264Level32, H264Level40},
+			[]byte{H264ProfileHigh},
+			[]byte{H264Level40},
 			m.opts.Resolutions))
 	m.Recording.SupportedAudio.SetValue(
 		buildSupportedAudioRecordingConfiguration(AudioCodecAACLC, 1,
@@ -268,12 +271,22 @@ func (m *Manager) handleSetupDataStream(value []byte, r *http.Request) {
 }
 
 // DefaultResolutions returns the recording resolutions advertised by default.
+// This mirrors the canonical HKSV camera set (30fps, plus the 320x240@15
+// variant Apple Watch needs); HomeKit refuses to enable recording if it can't
+// find one of these expected resolution/framerate combinations.
 func DefaultResolutions() []Resolution {
 	return []Resolution{
-		{1920, 1080, 24},
-		{1280, 720, 24},
-		{640, 480, 24},
-		{320, 240, 24},
+		{320, 180, 30},
+		{320, 240, 15},
+		{320, 240, 30},
+		{480, 270, 30},
+		{480, 360, 30},
+		{640, 360, 30},
+		{640, 480, 30},
+		{1280, 720, 30},
+		{1280, 960, 30},
+		{1920, 1080, 30},
+		{1600, 1200, 30},
 	}
 }
 
