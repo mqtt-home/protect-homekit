@@ -54,6 +54,8 @@ docker_manifests:
 
   - id: latest
     name_template: "pharndt/protect-homekit:latest"
+    # Don't move :latest for pre-releases (e.g. vX.Y.Z-hksv.N test builds).
+    skip_push: auto
     image_templates:
       - pharndt/protect-homekit:{{ .Tag }}-amd64
       - pharndt/protect-homekit:{{ .Tag }}-arm64
