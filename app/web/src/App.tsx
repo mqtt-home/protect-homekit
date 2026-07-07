@@ -147,14 +147,18 @@ function CameraCard({ camera, pairable, pin }: { camera: Camera; pairable: boole
         {camera.motion && <span className="badge badge-motion">MOTION</span>}
         {!camera.online && <span className="badge badge-offline">OFFLINE</span>}
         {liveError && !live && <span className="live-error">{liveError}</span>}
-        {showQR && (
-          <div className="qr-overlay" onClick={() => setShowQR(false)} title="Close">
-            <img src={`${API}/cameras/${camera.id}/qr`} alt={`Pair ${camera.name}`} width={220} height={220} />
-            <div className="qr-hint">Scan in the Home app, or enter code</div>
-            <div className="pin">{pin}</div>
-          </div>
-        )}
       </div>
+      {showQR && (
+        <div className="qr-modal" onClick={() => setShowQR(false)}>
+          <div className="qr-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="qr-title">Add “{camera.name}” to Home</div>
+            <img src={`${API}/cameras/${camera.id}/qr`} alt={`Pair ${camera.name}`} width={240} height={240} />
+            <div className="qr-hint">Scan in the Home app, or enter this code:</div>
+            <div className="pin">{pin}</div>
+            <button onClick={() => setShowQR(false)}>Close</button>
+          </div>
+        </div>
+      )}
       <div className="card-body">
         <div className="card-title">
           <span className={`dot ${camera.online ? 'dot-on' : 'dot-off'}`} />
