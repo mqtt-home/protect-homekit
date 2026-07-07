@@ -152,11 +152,12 @@ func newDataStreamManagement() *DataStreamManagement {
 		[]string{characteristic.PermissionRead, characteristic.PermissionEvents})
 	s.SupportedConfiguration.SetValue(buildSupportedDataStreamTransportConfiguration())
 
-	// SetupDataStreamTransport is written by the controller and read back for the
-	// response; it must not send change events.
+	// SetupDataStreamTransport is a write-response characteristic: the
+	// controller sends the setup request as a write and expects the
+	// port/salt TLV in the same HTTP response. It must not send change events.
 	s.SetupTransport = characteristic.NewBytes(typeSetupDataStreamTransport)
 	s.SetupTransport.Format = characteristic.FormatTLV8
-	s.SetupTransport.Permissions = []string{characteristic.PermissionRead, characteristic.PermissionWrite}
+	s.SetupTransport.Permissions = []string{characteristic.PermissionRead, characteristic.PermissionWrite, characteristic.PermissionWriteResponse}
 	s.SetupTransport.SetValue([]byte{})
 
 	s.Version = characteristic.NewString(typeDataStreamVersion)

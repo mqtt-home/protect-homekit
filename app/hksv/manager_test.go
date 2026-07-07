@@ -2,10 +2,13 @@ package hksv
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/brutella/hap/accessory"
+	"github.com/brutella/hap/characteristic"
 	"github.com/brutella/hap/service"
 )
 
@@ -128,5 +131,33 @@ func TestCanRecordGating(t *testing.T) {
 	_ = m.Operating.HomeKitCameraActive.SetValue(activeInactive)
 	if m.canRecord() {
 		t.Fatal("HomeKitCameraActive off must block recording")
+	}
+}
+
+func TestSetupDataStreamTransportIsWriteResponse(t *testing.T) {
+	m := testManager(t)
+
+	// The controller sends SetupDataStreamTransport as a HAP write-response
+	// request; the characteristic must advertise the "wr" permission and
+	// answer synchronously via SetValueRequestFunc.
+	hasWR := false
+	for _, p := range m.DataStream.SetupTransport.Permissions {
+		if p == characteristic.PermissionWriteResponse {
+			hasWR = true
+		}
+	}
+	if !hasWR {
+		t.Fatal("SetupDataStreamTransport must have the write-response permission")
+	}
+	if m.DataStream.SetupTransport.SetValueRequestFunc == nil {
+		t.Fatal("SetupDataStreamTransport must answer via SetValueRequestFunc")
+	}
+
+	// A malformed request must be rejected with a HAP error status so the
+	// controller isn't handed its own write back as the response.
+	resp, status := m.DataStream.SetupTransport.SetValueRequestFunc(
+		base64.StdEncoding.EncodeToString([]byte{0xff}), httptest.NewRequest("PUT", "/characteristics", nil))
+	if status == 0 {
+		t.Fatalf("expected error status for malformed setup request, got value %v", resp)
 	}
 }

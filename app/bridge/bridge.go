@@ -28,6 +28,12 @@ import (
 // categoryBridge is the HomeKit accessory category for a bridge.
 const categoryBridge = 2
 
+// hapProtocolVersion is advertised in the mDNS TXT record ("pv"). brutella/hap
+// defaults to 1.0, but HomeKit Data Stream / Secure Video are HAP 1.1 features
+// and controllers gate them on the advertised version (HAP-NodeJS also
+// advertises 1.1).
+const hapProtocolVersion = "1.1"
+
 // snapshotCacheTTL bounds how often the NVR is asked for a fresh snapshot;
 // the Home app refreshes tiles aggressively.
 const snapshotCacheTTL = 3 * time.Second
@@ -226,6 +232,7 @@ func (b *Bridge) startBridge(ctx context.Context, bs *protect.Bootstrap, accs []
 		return fmt.Errorf("create HAP server: %w", err)
 	}
 	server.Pin = normalizePin(b.cfg.HomeKit.Pin)
+	server.Protocol = hapProtocolVersion
 	if b.cfg.HomeKit.SetupID != "" {
 		server.SetupId = b.cfg.HomeKit.SetupID
 	}
@@ -278,6 +285,7 @@ func (b *Bridge) startCameraServer(ctx context.Context, acc *CameraAccessory, ca
 		return fmt.Errorf("create HAP server for %s: %w", cam.Name, err)
 	}
 	server.Pin = normalizePin(b.cfg.HomeKit.Pin)
+	server.Protocol = hapProtocolVersion
 	server.SetupId = setupID
 	if port > 0 {
 		server.Addr = fmt.Sprintf(":%d", port)

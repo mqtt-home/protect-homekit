@@ -8,6 +8,7 @@ package hksv
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -17,6 +18,10 @@ import (
 	"github.com/brutella/hap/service"
 	"github.com/philipparndt/go-logger"
 )
+
+// hapStatusInvalidValue is the HAP status code for an invalid write value
+// (HAP-R2 6.7.1.4).
+const hapStatusInvalidValue = -70410
 
 // Options configures a camera's HKSV support.
 type Options struct {
@@ -126,17 +131,17 @@ func (m *Manager) advertiseSupported() {
 
 	m.Recording.SupportedCamera.SetValue(
 		buildSupportedCameraRecordingConfiguration(m.opts.PrebufferMS, m.opts.FragmentMS, triggers))
-	// Recording advertises only High profile / Level 4.0, matching real HKSV
-	// cameras (offering the lower profiles here can confuse the controller's
-	// recording negotiation).
+	// Video/audio recording config mirrors homebridge-unifi-protect, which does
+	// HKSV with these exact Protect cameras: H.264 Main profile, levels 3.1/3.2/
+	// 4.0, and AAC-LC audio at 16 kHz.
 	m.Recording.SupportedVideo.SetValue(
 		buildSupportedVideoRecordingConfiguration(
-			[]byte{H264ProfileHigh},
-			[]byte{H264Level40},
+			[]byte{H264ProfileMain},
+			[]byte{H264Level31, H264Level32, H264Level40},
 			m.opts.Resolutions))
 	m.Recording.SupportedAudio.SetValue(
 		buildSupportedAudioRecordingConfiguration(AudioCodecAACLC, 1,
-			[]byte{SampleRate16kHz, SampleRate24kHz, SampleRate32kHz}))
+			[]byte{SampleRate16kHz}))
 }
 
 // wireCallbacks connects the characteristic writes to recording state. Each
@@ -182,15 +187,23 @@ func (m *Manager) wireCallbacks() {
 	})
 
 	// The controller writes SetupDataStreamTransport to open a recording data
-	// stream. The value it reads back must contain the listening port and the
-	// accessory key salt.
-	m.DataStream.SetupTransport.OnValueUpdate(func(newValue, _ []byte, r *http.Request) {
-		logger.Info("HKSV write SetupDataStreamTransport", "camera", cam, "remote", r != nil, "bytes", len(newValue))
-		if r == nil {
-			return
+	// stream. It is a write-response characteristic: the listening port and
+	// accessory key salt must be returned in the same HTTP response (the
+	// controller never does a follow-up read).
+	m.DataStream.SetupTransport.SetValueRequestFunc = func(v interface{}, r *http.Request) (interface{}, int) {
+		encoded, _ := v.(string)
+		value, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			logger.Error("HKSV: decode SetupDataStreamTransport", "camera", cam, "error", err)
+			return nil, hapStatusInvalidValue
 		}
-		m.handleSetupDataStream(newValue, r)
-	})
+		logger.Info("HKSV write SetupDataStreamTransport", "camera", cam, "bytes", len(value))
+		resp, ok := m.handleSetupDataStream(value, r)
+		if !ok {
+			return nil, hapStatusInvalidValue
+		}
+		return base64.StdEncoding.EncodeToString(resp), 0
+	}
 }
 
 // reconcile enables or disables the prebuffer based on the current state.
@@ -225,49 +238,48 @@ func (m *Manager) hasConfig() bool {
 	return m.hasSel
 }
 
-// handleSetupDataStream derives the HDS keys, starts a listener and answers with
-// the port and accessory salt.
-func (m *Manager) handleSetupDataStream(value []byte, r *http.Request) {
+// handleSetupDataStream derives the HDS keys, starts a listener and returns the
+// write-response TLV carrying the port and accessory salt.
+func (m *Manager) handleSetupDataStream(value []byte, r *http.Request) ([]byte, bool) {
 	req, err := parseSetupDataStreamRequest(value)
 	if err != nil {
 		logger.Error("HKSV: parse SetupDataStreamTransport", "camera", m.opts.CameraName, "error", err)
-		return
+		return nil, false
 	}
 	if req.command != commandStartSession || req.transportType != transportHomeKitDataStream {
 		logger.Debug("HKSV: unsupported data stream setup", "camera", m.opts.CameraName,
 			"command", req.command, "transport", req.transportType)
-		return
+		return nil, false
 	}
 
 	shared, ok := hap.SharedKeyForRequest(r)
 	if !ok {
 		logger.Error("HKSV: no HAP session for data stream setup", "camera", m.opts.CameraName)
-		return
+		return nil, false
 	}
 
 	accessorySalt := make([]byte, 32)
 	if _, err := rand.Read(accessorySalt); err != nil {
 		logger.Error("HKSV: generate accessory salt", "camera", m.opts.CameraName, "error", err)
-		return
+		return nil, false
 	}
 
 	keys, err := deriveHDSKeys(shared, req.controllerKey, accessorySalt)
 	if err != nil {
 		logger.Error("HKSV: derive data stream keys", "camera", m.opts.CameraName, "error", err)
-		return
+		return nil, false
 	}
 
 	srv, err := NewServer(keys, m.rec, m.opts.CameraName, m.canRecord, m.hasConfig)
 	if err != nil {
 		logger.Error("HKSV: start data stream listener", "camera", m.opts.CameraName, "error", err)
-		return
+		return nil, false
 	}
 
-	// Publish the response so the controller's read-back returns the port/salt.
-	m.DataStream.SetupTransport.SetValue(buildSetupDataStreamResponse(uint16(srv.Port()), accessorySalt))
 	logger.Debug("HKSV data stream set up", "camera", m.opts.CameraName, "port", srv.Port())
-
 	go srv.Serve(m.ctx)
+
+	return buildSetupDataStreamResponse(uint16(srv.Port()), accessorySalt), true
 }
 
 // DefaultResolutions returns the recording resolutions advertised by default.
