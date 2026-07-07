@@ -8,6 +8,7 @@ package hksv
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -135,27 +136,44 @@ func (m *Manager) advertiseSupported() {
 			[]byte{SampleRate16kHz, SampleRate24kHz, SampleRate32kHz}))
 }
 
-// wireCallbacks connects the characteristic writes to recording state.
+// wireCallbacks connects the characteristic writes to recording state. Each
+// write is logged so the HomeKit enable-recording sequence is fully traceable.
 func (m *Manager) wireCallbacks() {
-	m.Recording.Active.OnValueRemoteUpdate(func(int) { m.reconcile() })
-	m.Operating.HomeKitCameraActive.OnValueRemoteUpdate(func(int) { m.reconcile() })
+	cam := m.opts.CameraName
+
+	m.Recording.Active.OnValueRemoteUpdate(func(v int) {
+		logger.Info("HKSV write Active (recording)", "camera", cam, "value", v)
+		m.reconcile()
+	})
+	m.Operating.HomeKitCameraActive.OnValueRemoteUpdate(func(v int) {
+		logger.Info("HKSV write HomeKitCameraActive", "camera", cam, "value", v)
+		m.reconcile()
+	})
+	m.Operating.EventSnapshotsActive.OnValueRemoteUpdate(func(v int) {
+		logger.Info("HKSV write EventSnapshotsActive", "camera", cam, "value", v)
+	})
+	m.Operating.PeriodicSnapshotsActive.OnValueRemoteUpdate(func(v int) {
+		logger.Info("HKSV write PeriodicSnapshotsActive", "camera", cam, "value", v)
+	})
 	m.Recording.RecordingAudioActive.OnValueRemoteUpdate(func(v int) {
+		logger.Info("HKSV write RecordingAudioActive", "camera", cam, "value", v)
 		m.mu.Lock()
 		m.audioOn = v == activeActive && m.hasMic
 		m.mu.Unlock()
 		m.reconcile()
 	})
 	m.Recording.SelectedConfiguration.OnValueRemoteUpdate(func(v []byte) {
+		logger.Info("HKSV write SelectedCameraRecordingConfiguration", "camera", cam, "bytes", len(v), "hex", fmt.Sprintf("%x", v))
 		sc, err := parseSelectedConfig(v)
 		if err != nil {
-			logger.Error("HKSV: parse selected configuration", "camera", m.opts.CameraName, "error", err)
+			logger.Error("HKSV: parse selected configuration", "camera", cam, "error", err)
 			return
 		}
 		m.mu.Lock()
 		m.selected = sc
 		m.hasSel = true
 		m.mu.Unlock()
-		logger.Info("HKSV recording configured", "camera", m.opts.CameraName,
+		logger.Info("HKSV recording configured", "camera", cam,
 			"resolution", resolutionString(sc), "prebuffer_ms", sc.PrebufferMS, "fragment_ms", sc.FragmentLengthMS)
 		m.reconcile()
 	})
@@ -164,6 +182,7 @@ func (m *Manager) wireCallbacks() {
 	// stream. The value it reads back must contain the listening port and the
 	// accessory key salt.
 	m.DataStream.SetupTransport.OnValueUpdate(func(newValue, _ []byte, r *http.Request) {
+		logger.Info("HKSV write SetupDataStreamTransport", "camera", cam, "remote", r != nil, "bytes", len(newValue))
 		if r == nil {
 			return
 		}
@@ -178,6 +197,10 @@ func (m *Manager) reconcile() {
 	hasSel := m.hasSel
 	audio := m.audioOn
 	m.mu.Unlock()
+
+	logger.Info("HKSV reconcile", "camera", m.opts.CameraName,
+		"active", m.Recording.Active.Value(), "homekit_camera_active", m.Operating.HomeKitCameraActive.Value(),
+		"has_selected_config", hasSel, "can_record", m.canRecord())
 
 	if m.canRecord() && hasSel {
 		m.rec.enable(sel, audio)
