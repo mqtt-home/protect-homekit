@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/brutella/hap/accessory"
+	"github.com/brutella/hap/service"
 )
 
 func testManager(t *testing.T) *Manager {
@@ -84,6 +85,32 @@ func TestManagerServicesMarshal(t *testing.T) {
 		if !bytes.Contains(data, []byte(`"`+typ+`"`)) {
 			t.Fatalf("service/characteristic type %q missing from accessory JSON:\n%s", typ, js)
 		}
+	}
+}
+
+// TestRecordingServiceLinks verifies the linked-service relationships HomeKit
+// requires to enable recording: the data-stream transport and the event-trigger
+// service must both be linked to the recording management service.
+func TestRecordingServiceLinks(t *testing.T) {
+	m := testManager(t)
+
+	linked := func(target *service.S) bool {
+		for _, s := range m.Recording.S.Linked {
+			if s == target {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !linked(m.DataStream.S) {
+		t.Fatal("DataStreamTransportManagement must be linked to CameraRecordingManagement")
+	}
+
+	motion := service.NewMotionSensor()
+	m.LinkTriggerService(motion.S)
+	if !linked(motion.S) {
+		t.Fatal("trigger service must be linked to CameraRecordingManagement")
 	}
 }
 

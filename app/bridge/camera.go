@@ -82,11 +82,19 @@ func newCameraAccessory(cam protect.Camera, firmwareFallback string, str *stream
 	}
 
 	// HomeKit Secure Video: attach the recording, operating-mode and data-stream
-	// services. The home hub triggers recording off the motion sensor above.
+	// services. The home hub triggers recording off the motion sensor above,
+	// which must be linked to the recording service so HomeKit associates the
+	// trigger with recording.
 	if secureVideo != nil {
 		a.hksv = secureVideo
 		for _, s := range secureVideo.Services() {
 			a.AddS(s)
+		}
+		if a.Motion != nil {
+			secureVideo.LinkTriggerService(a.Motion.S)
+		}
+		if a.Doorbell != nil {
+			secureVideo.LinkTriggerService(a.Doorbell.S)
 		}
 	}
 

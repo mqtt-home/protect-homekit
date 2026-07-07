@@ -76,6 +76,12 @@ func NewManager(opts Options) *Manager {
 		cancel:     cancel,
 	}
 
+	// HomeKit needs the data-stream transport linked to the recording
+	// management service to know where to open the recording stream. Without
+	// this linked-service relationship the controller refuses to enable
+	// recording (erroring before it ever contacts the accessory).
+	m.Recording.AddS(m.DataStream.S)
+
 	// Reflect audio availability so the controller doesn't expect audio the
 	// camera can't provide.
 	if !opts.HasMic {
@@ -90,6 +96,15 @@ func NewManager(opts Options) *Manager {
 // Services returns the HKSV services to add to the camera accessory.
 func (m *Manager) Services() []*service.S {
 	return []*service.S{m.Recording.S, m.Operating.S, m.DataStream.S}
+}
+
+// LinkTriggerService links the event-trigger service (the motion sensor or
+// doorbell) to the recording management service, so HomeKit associates the
+// trigger with recording. Call after the accessory's trigger service exists.
+func (m *Manager) LinkTriggerService(s *service.S) {
+	if s != nil {
+		m.Recording.AddS(s)
+	}
 }
 
 // Close stops recording and tears down any active data streams.
