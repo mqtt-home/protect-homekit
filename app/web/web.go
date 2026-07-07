@@ -73,6 +73,7 @@ func (ws *WebServer) setupRoutes() {
 		r.Get("/cameras", ws.cameras)
 		r.Get("/cameras/{id}/snapshot", ws.snapshot)
 		r.Get("/cameras/{id}/live", ws.live)
+		r.Get("/cameras/{id}/qr", ws.cameraQR)
 		r.Get("/qr", ws.qr)
 		r.Get("/events", ws.handleSSE)
 	})
@@ -97,6 +98,7 @@ func (ws *WebServer) info(w http.ResponseWriter, _ *http.Request) {
 		"pin":         ws.b.Pin(),
 		"setup_id":    ws.b.SetupID(),
 		"setup_uri":   ws.b.SetupURI(),
+		"standalone":  ws.b.Standalone(),
 		"nvr":         nvrName,
 		"nvr_version": nvrVersion,
 		"cameras":     len(ws.b.CameraInfos()),
@@ -127,6 +129,23 @@ func (ws *WebServer) snapshot(w http.ResponseWriter, r *http.Request) {
 // qr renders the HomeKit pairing QR code as a PNG.
 func (ws *WebServer) qr(w http.ResponseWriter, _ *http.Request) {
 	png, err := qrcode.Encode(ws.b.SetupURI(), qrcode.Medium, 320)
+	if err != nil {
+		http.Error(w, "qr error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(png)
+}
+
+// cameraQR renders the pairing QR code for a single standalone camera.
+func (ws *WebServer) cameraQR(w http.ResponseWriter, r *http.Request) {
+	uri, ok := ws.b.CameraSetupURI(chi.URLParam(r, "id"))
+	if !ok {
+		http.Error(w, "camera not pairable (bridged mode)", http.StatusNotFound)
+		return
+	}
+	png, err := qrcode.Encode(uri, qrcode.Medium, 320)
 	if err != nil {
 		http.Error(w, "qr error", http.StatusInternalServerError)
 		return

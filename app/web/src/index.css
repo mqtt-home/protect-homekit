@@ -242,3 +242,38 @@ button:hover {
   text-align: center;
   grid-column: 1 / -1;
 }
+
+/* Standalone-mode per-camera pairing */
+.connect-btn {
+  margin-left: auto;
+  padding: 3px 12px;
+  font-size: 0.75rem;
+  border-radius: 6px;
+}
+
+.qr-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: pointer;
+  padding: 12px;
+}
+
+.qr-overlay img {
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+  max-width: 70%;
+  height: auto;
+}
+
+.qr-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}

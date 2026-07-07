@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,10 +39,14 @@ type Bridge struct {
 	client *protect.Client
 	events *protect.Events
 
-	server    *hap.Server
-	bridgeAcc *accessory.Bridge
-	cancel    context.CancelFunc
-	done      chan struct{} // closed when the HAP server has fully stopped
+	// servers holds the running HAP servers. In bridged mode there is one (a
+	// bridge with all cameras); in standalone mode (secure_video, required for
+	// HKSV) there is one per camera, since HomeKit Secure Video does not work
+	// on bridged camera accessories.
+	servers    []*hapServer
+	standalone bool
+	bridgeAcc  *accessory.Bridge // bridged mode only
+	cancel     context.CancelFunc
 
 	cameras  map[string]*CameraAccessory // by Protect camera id
 	byAID    map[uint64]*CameraAccessory
@@ -91,6 +96,29 @@ type cachedSnapshot struct {
 	taken time.Time
 }
 
+// hapServer is one running HAP accessory server plus the pairing details needed
+// to render its QR code.
+type hapServer struct {
+	server   *hap.Server
+	done     chan struct{} // closed when the server has fully stopped
+	label    string        // bridge name, or camera name in standalone mode
+	cameraID string        // set in standalone mode
+	pin      string
+	setupID  string
+	category int
+	port     int
+}
+
+// CameraPairing is the pairing info for one standalone camera accessory, used
+// by the web UI to show a per-camera "Connect" QR code.
+type CameraPairing struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Pin      string `json:"pin"`
+	SetupURI string `json:"setup_uri"`
+	Port     int    `json:"port"`
+}
+
 func New(cfg config.Config) *Bridge {
 	client := protect.NewClient(cfg.Protect.Host, cfg.Protect.Username, cfg.Protect.Password, cfg.Protect.VerifySSL)
 	return &Bridge{
@@ -125,7 +153,13 @@ func (b *Bridge) Start() error {
 	}
 	b.applyBootstrap(bs)
 
-	var accs []*accessory.A
+	b.standalone = b.cfg.Cameras.SecureVideoEnabled()
+
+	type builtCamera struct {
+		acc *CameraAccessory
+		cam protect.Camera
+	}
+	var built []builtCamera
 	for _, cam := range bs.Cameras {
 		if !b.cfg.Cameras.CameraSelected(cam.Name, cam.ID, cam.Mac) {
 			logger.Debug("Skipping camera (filtered)", "camera", cam.Name)
@@ -137,14 +171,46 @@ func (b *Bridge) Start() error {
 		}
 
 		acc := b.buildCamera(cam)
-		accs = append(accs, acc.A)
+		built = append(built, builtCamera{acc, cam})
 		logger.Info("Configured camera", "camera", cam.Name, "type", cam.Type,
 			"doorbell", cam.IsDoorbell(), "aid", acc.Id)
 	}
-	if len(accs) == 0 {
+	if len(built) == 0 {
 		return fmt.Errorf("no cameras to bridge")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	b.cancel = cancel
+
+	if b.standalone {
+		// One HAP server per camera. HKSV only works on standalone camera
+		// accessories, not bridged ones.
+		for i, bc := range built {
+			if err := b.startCameraServer(ctx, bc.acc, bc.cam, i); err != nil {
+				return err
+			}
+		}
+	} else {
+		accs := make([]*accessory.A, 0, len(built))
+		for _, bc := range built {
+			accs = append(accs, bc.acc.A)
+		}
+		if err := b.startBridge(ctx, bs, accs); err != nil {
+			return err
+		}
+	}
+
+	b.events.OnBootstrap = b.onBootstrap
+	b.events.OnCameraUpdate = b.onCameraUpdate
+	go b.events.Run(ctx, bs)
+
+	b.logPairingInfo()
+	logger.Info("protect-homekit bridge started", "cameras", len(b.cameras), "standalone", b.standalone)
+	return nil
+}
+
+// startBridge starts the single bridged HAP server (secure_video disabled).
+func (b *Bridge) startBridge(ctx context.Context, bs *protect.Bootstrap, accs []*accessory.A) error {
 	b.bridgeAcc = accessory.NewBridge(accessory.Info{
 		Name:         b.cfg.HomeKit.BridgeName,
 		Manufacturer: "mqtt-home",
@@ -171,29 +237,85 @@ func (b *Bridge) Start() error {
 	}
 	// brutella/hap has no built-in handler for HomeKit snapshot requests
 	// (POST /resource on the secured session); register our own that serves
-	// JPEGs straight from the NVR.
+	// JPEGs straight from the NVR (AID identifies the camera).
 	server.ServeMux().HandleFunc("/resource", b.handleResource)
-	b.server = server
 
-	ctx, cancel := context.WithCancel(context.Background())
-	b.cancel = cancel
-	b.done = make(chan struct{})
+	hs := &hapServer{
+		server:   server,
+		done:     make(chan struct{}),
+		label:    b.cfg.HomeKit.BridgeName,
+		pin:      b.cfg.HomeKit.Pin,
+		setupID:  b.cfg.HomeKit.SetupID,
+		category: categoryBridge,
+		port:     b.cfg.HomeKit.Port,
+	}
+	b.servers = append(b.servers, hs)
+	b.serve(ctx, hs, b.cfg.HomeKit.StorageDir)
+	return nil
+}
 
+// startCameraServer starts one standalone HAP server for a single camera
+// (secure_video enabled). Each camera gets its own pairing store, port
+// (homekit.port + index) and setup id, so it is added to Home individually.
+func (b *Bridge) startCameraServer(ctx context.Context, acc *CameraAccessory, cam protect.Camera, index int) error {
+	// A standalone accessory is its own primary; brutella assigns AID 1.
+	acc.Id = 1
+
+	category := int(accessory.TypeIPCamera)
+	if cam.IsDoorbell() {
+		category = int(accessory.TypeVideoDoorbell)
+	}
+
+	port := 0
+	if b.cfg.HomeKit.Port > 0 {
+		port = b.cfg.HomeKit.Port + index
+	}
+	setupID := cameraSetupID(cam.ID)
+	storeDir := filepath.Join(b.cfg.HomeKit.StorageDir, "cam-"+sanitizeID(cam.ID))
+
+	server, err := hap.NewServer(hap.NewFsStore(storeDir), acc.A)
+	if err != nil {
+		return fmt.Errorf("create HAP server for %s: %w", cam.Name, err)
+	}
+	server.Pin = normalizePin(b.cfg.HomeKit.Pin)
+	server.SetupId = setupID
+	if port > 0 {
+		server.Addr = fmt.Sprintf(":%d", port)
+	}
+	if len(b.cfg.HomeKit.Interfaces) > 0 {
+		server.Ifaces = b.cfg.HomeKit.Interfaces
+	}
+	// Snapshot requests arrive on this camera's own server, so bind the handler
+	// to this camera id rather than relying on the AID.
+	id := cam.ID
+	server.ServeMux().HandleFunc("/resource", func(w http.ResponseWriter, r *http.Request) {
+		b.serveSnapshot(w, r, id)
+	})
+
+	hs := &hapServer{
+		server:   server,
+		done:     make(chan struct{}),
+		label:    cam.Name,
+		cameraID: cam.ID,
+		pin:      b.cfg.HomeKit.Pin,
+		setupID:  setupID,
+		category: category,
+		port:     port,
+	}
+	b.servers = append(b.servers, hs)
+	b.serve(ctx, hs, storeDir)
+	return nil
+}
+
+// serve launches a HAP server in the background until ctx is cancelled.
+func (b *Bridge) serve(ctx context.Context, hs *hapServer, storeDir string) {
 	go func() {
-		defer close(b.done)
-		logger.Info("Starting HAP server", "bridge", b.cfg.HomeKit.BridgeName, "pin", b.cfg.HomeKit.Pin, "storage", b.cfg.HomeKit.StorageDir)
-		if err := server.ListenAndServe(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("HAP server stopped", "error", err)
+		defer close(hs.done)
+		logger.Info("Starting HAP server", "accessory", hs.label, "port", hs.port, "storage", storeDir)
+		if err := hs.server.ListenAndServe(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("HAP server stopped", "accessory", hs.label, "error", err)
 		}
 	}()
-
-	b.events.OnBootstrap = b.onBootstrap
-	b.events.OnCameraUpdate = b.onCameraUpdate
-	go b.events.Run(ctx, bs)
-
-	b.logPairingInfo()
-	logger.Info("protect-homekit bridge started", "cameras", len(b.cameras))
-	return nil
 }
 
 // SetUpdateListener registers a callback fired whenever a camera's state
@@ -203,7 +325,43 @@ func (b *Bridge) SetUpdateListener(fn func(CameraInfo)) { b.onUpdate = fn }
 func (b *Bridge) BridgeName() string { return b.cfg.HomeKit.BridgeName }
 func (b *Bridge) Pin() string        { return b.cfg.HomeKit.Pin }
 func (b *Bridge) SetupID() string    { return b.cfg.HomeKit.SetupID }
-func (b *Bridge) Healthy() bool      { return b.server != nil }
+func (b *Bridge) Healthy() bool      { return len(b.servers) > 0 }
+
+// Standalone reports whether cameras are published as individual accessories
+// (secure_video enabled), in which case each has its own pairing QR.
+func (b *Bridge) Standalone() bool { return b.standalone }
+
+// CameraPairings returns per-camera pairing info for the web UI "Connect"
+// buttons. Empty in bridged mode (there is a single bridge QR instead).
+func (b *Bridge) CameraPairings() []CameraPairing {
+	if !b.standalone {
+		return nil
+	}
+	out := make([]CameraPairing, 0, len(b.servers))
+	for _, hs := range b.servers {
+		if hs.cameraID == "" {
+			continue
+		}
+		out = append(out, CameraPairing{
+			ID:       hs.cameraID,
+			Name:     hs.label,
+			Pin:      hs.pin,
+			SetupURI: setupURI(hs.pin, hs.category, hs.setupID),
+			Port:     hs.port,
+		})
+	}
+	return out
+}
+
+// CameraSetupURI returns the pairing URI for a single standalone camera.
+func (b *Bridge) CameraSetupURI(cameraID string) (string, bool) {
+	for _, hs := range b.servers {
+		if hs.cameraID == cameraID {
+			return setupURI(hs.pin, hs.category, hs.setupID), true
+		}
+	}
+	return "", false
+}
 
 // SetupURI returns the X-HM:// pairing payload encoded in the HomeKit QR code.
 func (b *Bridge) SetupURI() string {
@@ -297,11 +455,12 @@ func (b *Bridge) Stop() {
 			acc.hksv.Close()
 		}
 	}
-	if b.done != nil {
+	deadline := time.After(5 * time.Second)
+	for _, hs := range b.servers {
 		select {
-		case <-b.done:
-		case <-time.After(5 * time.Second):
-			logger.Warn("Timed out waiting for HAP server shutdown")
+		case <-hs.done:
+		case <-deadline:
+			logger.Warn("Timed out waiting for HAP server shutdown", "accessory", hs.label)
 		}
 	}
 }
@@ -505,38 +664,56 @@ type resourceRequest struct {
 	AID          uint64 `json:"aid"`
 }
 
-// handleResource serves HomeKit snapshot requests from the Protect NVR (with
-// a short-lived cache, since the Home app polls tiles frequently).
+// handleResource serves HomeKit snapshot requests on the bridged server, where
+// the AID identifies which camera the request is for.
 func (b *Bridge) handleResource(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	req, ok := parseResourceRequest(w, r)
+	if !ok {
 		return
 	}
-
-	var req resourceRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.ResourceType != "image" {
-		http.Error(w, "unsupported resource type", http.StatusBadRequest)
-		return
-	}
-
 	acc, ok := b.byAID[req.AID]
 	if !ok {
 		http.Error(w, "unknown accessory", http.StatusNotFound)
 		return
 	}
+	b.writeSnapshot(w, acc.ProtectID, acc.Name(), req.ImageWidth, req.ImageHeight)
+}
 
-	data, err := b.snapshot(acc.ProtectID, req.ImageWidth, req.ImageHeight)
+// serveSnapshot serves a snapshot request on a standalone camera server, where
+// the camera is fixed (the request arrives on that camera's own server).
+func (b *Bridge) serveSnapshot(w http.ResponseWriter, r *http.Request, cameraID string) {
+	req, ok := parseResourceRequest(w, r)
+	if !ok {
+		return
+	}
+	b.writeSnapshot(w, cameraID, cameraID, req.ImageWidth, req.ImageHeight)
+}
+
+func parseResourceRequest(w http.ResponseWriter, r *http.Request) (resourceRequest, bool) {
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		logger.Error("Snapshot failed", "camera", acc.Name(), "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return resourceRequest{}, false
+	}
+	var req resourceRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return resourceRequest{}, false
+	}
+	if req.ResourceType != "image" {
+		http.Error(w, "unsupported resource type", http.StatusBadRequest)
+		return resourceRequest{}, false
+	}
+	return req, true
+}
+
+func (b *Bridge) writeSnapshot(w http.ResponseWriter, cameraID, label string, width, height int) {
+	data, err := b.snapshot(cameraID, width, height)
+	if err != nil {
+		logger.Error("Snapshot failed", "camera", label, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "image/jpeg")
 	_, _ = w.Write(data)
 }
@@ -564,15 +741,44 @@ func (b *Bridge) snapshot(cameraID string, width, height int) ([]byte, error) {
 	return data, nil
 }
 
-// logPairingInfo prints the setup code and a scannable QR code, since this
-// bridge has no web UI.
+// logPairingInfo prints the setup code and a scannable QR code for each HAP
+// server (one for the bridge, or one per camera in standalone mode).
 func (b *Bridge) logPairingInfo() {
-	uri := setupURI(b.cfg.HomeKit.Pin, categoryBridge, b.cfg.HomeKit.SetupID)
-	logger.Info("HomeKit pairing", "pin", b.cfg.HomeKit.Pin, "uri", uri)
-
-	if qr, err := qrcode.New(uri, qrcode.Medium); err == nil {
-		fmt.Println(qr.ToSmallString(false))
+	for _, hs := range b.servers {
+		uri := setupURI(hs.pin, hs.category, hs.setupID)
+		logger.Info("HomeKit pairing", "accessory", hs.label, "pin", hs.pin, "uri", uri)
+		if qr, err := qrcode.New(uri, qrcode.Medium); err == nil {
+			fmt.Println(hs.label + ":")
+			fmt.Println(qr.ToSmallString(false))
+		}
 	}
+}
+
+// cameraSetupID derives a stable 4-character HomeKit setup id from a camera id,
+// so each standalone camera advertises a distinct pairing QR.
+func cameraSetupID(cameraID string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cameraID))
+	v := h.Sum32()
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	var out [4]byte
+	for i := range out {
+		out[i] = alphabet[v%uint32(len(alphabet))]
+		v /= uint32(len(alphabet))
+	}
+	return string(out[:])
+}
+
+// sanitizeID makes a camera id safe for use as a directory name.
+func sanitizeID(id string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, id)
 }
 
 // stableAID derives a stable accessory ID from the Protect camera id so that
