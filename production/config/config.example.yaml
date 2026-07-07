@@ -40,6 +40,12 @@ cameras:
   # Note: also affects Protect recordings (H.264 needs more storage).
   # Default: true.
   force_h264: true
+  # HomeKit Secure Video: motion-triggered iCloud recordings. Adds a "Record"
+  # option per camera in the Home app. Requires a Home hub (Apple TV/HomePod)
+  # and iCloud+. Runs a persistent ffmpeg prebuffer per recording-enabled
+  # camera (more CPU/bandwidth than on-demand live streaming). Video is copied,
+  # audio transcoded to AAC. Keep motion_sensors enabled. Default: false.
+  secure_video: false
 
 # Status web UI: camera overview with live snapshots/motion (SSE), HomeKit
 # pairing QR code, /api/livez liveness endpoint.

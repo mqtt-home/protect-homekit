@@ -10,6 +10,7 @@ import (
 	"github.com/brutella/hap/rtp"
 	"github.com/brutella/hap/service"
 	"github.com/brutella/hap/tlv8"
+	"github.com/mqtt-home/protect-homekit/hksv"
 	"github.com/mqtt-home/protect-homekit/protect"
 	"github.com/philipparndt/go-logger"
 )
@@ -27,13 +28,15 @@ type CameraAccessory struct {
 
 	ProtectID string
 	streamer  *streamer
+	// hksv is the HomeKit Secure Video manager, nil when HKSV is disabled.
+	hksv *hksv.Manager
 
 	// lastRing tracks the ring timestamp so websocket patches only fire the
 	// doorbell on an actual change.
 	lastRing int64
 }
 
-func newCameraAccessory(cam protect.Camera, firmwareFallback string, str *streamer, motionSensor bool) *CameraAccessory {
+func newCameraAccessory(cam protect.Camera, firmwareFallback string, str *streamer, motionSensor bool, secureVideo *hksv.Manager) *CameraAccessory {
 	category := accessory.TypeIPCamera
 	if cam.IsDoorbell() {
 		category = accessory.TypeVideoDoorbell
@@ -76,6 +79,15 @@ func newCameraAccessory(cam protect.Camera, firmwareFallback string, str *stream
 		a.Motion = service.NewMotionSensor()
 		a.Motion.MotionDetected.SetValue(cam.IsMotionDetected)
 		a.AddS(a.Motion.S)
+	}
+
+	// HomeKit Secure Video: attach the recording, operating-mode and data-stream
+	// services. The home hub triggers recording off the motion sensor above.
+	if secureVideo != nil {
+		a.hksv = secureVideo
+		for _, s := range secureVideo.Services() {
+			a.AddS(s)
+		}
 	}
 
 	return a

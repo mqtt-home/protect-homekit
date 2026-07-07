@@ -17,6 +17,7 @@ import (
 	"github.com/brutella/hap/accessory"
 	hlog "github.com/brutella/hap/log"
 	"github.com/mqtt-home/protect-homekit/config"
+	"github.com/mqtt-home/protect-homekit/hksv"
 	"github.com/mqtt-home/protect-homekit/protect"
 	"github.com/mqtt-home/protect-homekit/version"
 	"github.com/philipparndt/go-logger"
@@ -292,6 +293,9 @@ func (b *Bridge) Stop() {
 	}
 	for _, acc := range b.cameras {
 		acc.streamer.stopAll()
+		if acc.hksv != nil {
+			acc.hksv.Close()
+		}
 	}
 	if b.done != nil {
 		select {
@@ -378,7 +382,20 @@ func (b *Bridge) buildCamera(cam protect.Camera) *CameraAccessory {
 			return b.streamURL(id, width)
 		})
 
-	acc := newCameraAccessory(cam, version.Version, str, b.cfg.Cameras.MotionSensorsEnabled())
+	var secureVideo *hksv.Manager
+	if b.cfg.Cameras.SecureVideoEnabled() {
+		secureVideo = hksv.NewManager(hksv.Options{
+			CameraName: cam.Name,
+			FFmpegPath: b.cfg.FFmpeg.Path,
+			Debug:      b.cfg.FFmpeg.Debug,
+			Resolve:    func(width int) (string, error) { return b.streamURL(id, width) },
+			HasMotion:  b.cfg.Cameras.MotionSensorsEnabled(),
+			IsDoorbell: cam.IsDoorbell(),
+			HasMic:     b.cfg.FFmpeg.AudioEnabled() && (cam.FeatureFlags.HasMic || cam.IsMicEnabled),
+		})
+	}
+
+	acc := newCameraAccessory(cam, version.Version, str, b.cfg.Cameras.MotionSensorsEnabled(), secureVideo)
 	acc.Id = b.stableAID(cam.ID)
 
 	b.cameras[cam.ID] = acc

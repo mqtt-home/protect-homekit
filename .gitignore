@@ -11,3 +11,5 @@ config.test.yaml
 hap/
 hap-test/
 *.hap
+# ...but the vendored brutella/hap fork is source and must be tracked.
+!app/third_party/hap/

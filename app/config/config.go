@@ -89,6 +89,13 @@ type CamerasConfig struct {
 	// needs more storage). Enabled by default; disable to keep H.265 and
 	// switch cameras manually in the Protect UI (Camera > Video > Encoding).
 	ForceH264 *bool `json:"force_h264,omitempty"`
+	// SecureVideo enables HomeKit Secure Video: cameras gain a "Record" option
+	// in the Home app and motion-triggered clips are stored in iCloud. Unlike
+	// live streaming (on-demand ffmpeg), HKSV runs a persistent ffmpeg prebuffer
+	// per recording-enabled camera, so it uses more CPU and bandwidth while
+	// active. Disabled by default. Requires a Home hub (Apple TV/HomePod) and an
+	// iCloud+ plan. Motion sensors should stay enabled to trigger recordings.
+	SecureVideo *bool `json:"secure_video,omitempty"`
 }
 
 func (c CamerasConfig) MotionSensorsEnabled() bool {
@@ -101,6 +108,10 @@ func (c CamerasConfig) AutoEnableRTSPEnabled() bool {
 
 func (c CamerasConfig) ForceH264Enabled() bool {
 	return c.ForceH264 == nil || *c.ForceH264
+}
+
+func (c CamerasConfig) SecureVideoEnabled() bool {
+	return c.SecureVideo != nil && *c.SecureVideo
 }
 
 // matches reports whether the camera identified by name/id/mac is in the list.

@@ -11,6 +11,7 @@ require (
 	github.com/philipparndt/go-logger v1.10.0
 	github.com/philipparndt/go-logger/chi v1.10.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	golang.org/x/crypto v0.24.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -23,7 +24,6 @@ require (
 	github.com/vishvananda/netns v0.0.0-20200728191858-db3c7e526aae // indirect
 	github.com/xiam/to v0.0.0-20200126224905-d60d31e03561 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/crypto v0.24.0 // indirect
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
@@ -35,3 +35,7 @@ require (
 )
 
 replace github.com/brutella/dnssd => ./third_party/dnssd
+
+// Vendored to expose the Pair-Verify shared secret (session.SharedKeyForRequest)
+// that the HomeKit Secure Video data-stream transport needs. See third_party/hap.
+replace github.com/brutella/hap => ./third_party/hap
