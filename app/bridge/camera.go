@@ -107,6 +107,15 @@ func newCameraAccessory(cam protect.Camera, firmwareFallback string, str *stream
 func (a *CameraAccessory) setupStreamManagement() {
 	m := a.Stream
 
+	// HAP R2 gates the camera's "streaming" feature on an Active characteristic
+	// on CameraRTPStreamManagement. Without it a HKSV resident (Apple TV) refuses
+	// "Stream & Allow Recording" with "supported features do not include
+	// streaming". brutella's service omits it, so add it here (HAP-NodeJS adds it
+	// unconditionally). Default Active so the stream is available.
+	streamActive := characteristic.NewActive()
+	_ = streamActive.SetValue(characteristic.ActiveActive)
+	m.AddC(streamActive.C)
+
 	setTLV8Payload(m.StreamingStatus.Bytes, rtp.StreamingStatus{Status: rtp.StreamingStatusAvailable})
 	setTLV8Payload(m.SupportedRTPConfiguration.Bytes, rtp.NewConfiguration(rtp.CryptoSuite_AES_CM_128_HMAC_SHA1_80))
 	setTLV8Payload(m.SupportedVideoStreamConfiguration.Bytes, rtp.DefaultVideoStreamConfiguration())
