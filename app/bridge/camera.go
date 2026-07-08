@@ -110,21 +110,12 @@ func (a *CameraAccessory) setupStreamManagement() {
 	setTLV8Payload(m.StreamingStatus.Bytes, rtp.StreamingStatus{Status: rtp.StreamingStatusAvailable})
 	setTLV8Payload(m.SupportedRTPConfiguration.Bytes, rtp.NewConfiguration(rtp.CryptoSuite_AES_CM_128_HMAC_SHA1_80))
 	setTLV8Payload(m.SupportedVideoStreamConfiguration.Bytes, rtp.DefaultVideoStreamConfiguration())
-	// Only Opus: transcoding to AAC-ELD would need a libfdk build of ffmpeg.
-	// Advertise AAC-ELD (HomeKit's native camera audio codec) ahead of Opus when
-	// ffmpeg can encode it (libfdk_aac). iOS appears to gate a camera's Secure
-	// Video capability on AAC-ELD streaming support, so a HKSV camera should
-	// offer it; without libfdk_aac we advertise Opus only (as before) so iOS
-	// never selects a codec we can't produce.
-	audioCodecs := []rtp.AudioCodecConfiguration{rtp.NewOpusAudioCodecConfiguration()}
-	if a.streamer.aacEld {
-		audioCodecs = []rtp.AudioCodecConfiguration{
-			rtp.NewAacEldAudioCodecConfiguration(),
-			rtp.NewOpusAudioCodecConfiguration(),
-		}
-	}
+	// Opus only. AAC-ELD (HomeKit's native codec) was tried but ffmpeg's
+	// libfdk_aac fails to initialize the ELD encoder over RTP ("Transport
+	// library initialization error"), which killed the whole stream; Opus works
+	// reliably and is what the bridge has always used.
 	setTLV8Payload(m.SupportedAudioStreamConfiguration.Bytes, rtp.AudioStreamConfiguration{
-		Codecs:       audioCodecs,
+		Codecs:       []rtp.AudioCodecConfiguration{rtp.NewOpusAudioCodecConfiguration()},
 		ComfortNoise: false,
 	})
 
