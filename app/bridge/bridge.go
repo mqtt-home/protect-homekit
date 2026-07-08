@@ -37,6 +37,13 @@ const categoryBridge = 2
 // advertises 1.1).
 const hapProtocolVersion = "1.1"
 
+// accessoryIdentityGeneration is folded into each standalone camera's storage
+// dir and setup id. Bump it to force fresh HomeKit identities (new device id +
+// setup hash), so controllers/residents drop any cached accessory state; every
+// camera must then be removed and re-added in Home. Bumped to 2 after a long run
+// of dev iterations left stale recording state on the Apple TV.
+const accessoryIdentityGeneration = 2
+
 // snapshotCacheTTL bounds how often the NVR is asked for a fresh snapshot;
 // the Home app refreshes tiles aggressively.
 const snapshotCacheTTL = 3 * time.Second
@@ -304,7 +311,12 @@ func (b *Bridge) startCameraServer(ctx context.Context, acc *CameraAccessory, ca
 		port = b.cfg.HomeKit.Port + index
 	}
 	setupID := cameraSetupID(cam.ID)
-	storeDir := filepath.Join(b.cfg.HomeKit.StorageDir, "cam-"+sanitizeID(cam.ID))
+	// The identity generation is part of the store dir, so bumping it makes each
+	// camera generate a fresh device id (and thus setup hash) — HomeKit then
+	// treats it as a brand-new accessory with no cached state. Used to shed the
+	// stale controller/resident data accumulated across many dev iterations.
+	storeDir := filepath.Join(b.cfg.HomeKit.StorageDir,
+		fmt.Sprintf("cam-%s-g%d", sanitizeID(cam.ID), accessoryIdentityGeneration))
 
 	server, err := hap.NewServer(hap.NewFsStore(storeDir), acc.A)
 	if err != nil {
@@ -803,11 +815,13 @@ func (b *Bridge) logPairingInfo() {
 	}
 }
 
-// cameraSetupID derives a stable 4-character HomeKit setup id from a camera id,
-// so each standalone camera advertises a distinct pairing QR.
+// cameraSetupID derives a stable 4-character HomeKit setup id from a camera id
+// and the identity generation, so each standalone camera advertises a distinct
+// pairing QR that also changes when the identity generation is bumped.
 func cameraSetupID(cameraID string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(cameraID))
+	_, _ = h.Write([]byte{byte(accessoryIdentityGeneration)})
 	v := h.Sum32()
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	var out [4]byte
