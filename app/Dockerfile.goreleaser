@@ -1,42 +1,10 @@
-# Build ffmpeg with libfdk_aac so cameras can stream AAC-ELD — HomeKit's native
-# camera audio codec, which iOS wants for Secure Video. Alpine's stock ffmpeg
-# omits libfdk_aac (non-free license), so we compile ffmpeg against Alpine's
-# fdk-aac/x264/opus dev packages. Only ffmpeg itself is built from source; the
-# codecs come from apk, keeping the build tractable.
-FROM alpine:3.22 AS ffmpeg-builder
+# ffmpeg comes prebuilt with libfdk_aac from pharndt/protect-ffmpeg (built by
+# .github/workflows/build-ffmpeg.yml). Compiling ffmpeg in this per-release
+# build blows GoReleaser's 1h timeout under QEMU, so we FROM the prebuilt image
+# instead. It already carries ffmpeg + its runtime libs + tzdata.
+FROM pharndt/protect-ffmpeg:n7.1
 
-ARG FFMPEG_VERSION=n7.1
-
-RUN apk add --no-cache \
-    build-base pkgconf nasm yasm git \
-    x264-dev fdk-aac-dev opus-dev openssl-dev zlib-dev
-
-RUN git clone --depth 1 --branch "${FFMPEG_VERSION}" https://github.com/FFmpeg/FFmpeg.git /ffmpeg-src \
-    && cd /ffmpeg-src \
-    && ./configure \
-        --prefix=/usr/local \
-        --enable-gpl --enable-nonfree --enable-version3 \
-        --enable-libx264 --enable-libfdk-aac --enable-libopus \
-        --enable-openssl \
-        --disable-doc --disable-ffplay \
-    && make -j"$(nproc)" \
-    && make install \
-    && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -q libfdk_aac
-
-# Runtime image.
-FROM alpine:3.22
-
-# Shared libraries the compiled ffmpeg links against (same Alpine version as the
-# builder, so ABI matches). tzdata for local timestamps.
-RUN apk add --no-cache \
-    x264-libs fdk-aac opus libssl3 libcrypto3 libgcc zlib tzdata \
-    && adduser -D -H -u 1000 protect
-
-COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
-
-# Fail the build (not at runtime) if the binary can't load or lacks AAC-ELD.
-RUN ffmpeg -hide_banner -encoders | grep -q libfdk_aac
+RUN adduser -D -H -u 1000 protect
 
 COPY protect-homekit /protect-homekit
 COPY web/dist /web/dist

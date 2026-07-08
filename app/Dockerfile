@@ -24,39 +24,12 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o protect-homekit .
 
-# ffmpeg with libfdk_aac: relays RTSPS -> HomeKit SRTP (video copied) and lets
-# cameras stream AAC-ELD, which iOS wants for Secure Video. Alpine's stock
-# ffmpeg omits libfdk_aac (non-free), so compile ffmpeg against Alpine's
-# fdk-aac/x264/opus dev packages; only ffmpeg is built from source.
-FROM alpine:3.22 AS ffmpeg-builder
+# ffmpeg comes prebuilt with libfdk_aac from pharndt/protect-ffmpeg (built by
+# .github/workflows/build-ffmpeg.yml) so this image doesn't recompile ffmpeg.
+# It already carries ffmpeg + its runtime libs + tzdata.
+FROM pharndt/protect-ffmpeg:n7.1
 
-ARG FFMPEG_VERSION=n7.1
-
-RUN apk add --no-cache \
-    build-base pkgconf nasm yasm git \
-    x264-dev fdk-aac-dev opus-dev openssl-dev zlib-dev
-
-RUN git clone --depth 1 --branch "${FFMPEG_VERSION}" https://github.com/FFmpeg/FFmpeg.git /ffmpeg-src \
-    && cd /ffmpeg-src \
-    && ./configure \
-        --prefix=/usr/local \
-        --enable-gpl --enable-nonfree --enable-version3 \
-        --enable-libx264 --enable-libfdk-aac --enable-libopus \
-        --enable-openssl \
-        --disable-doc --disable-ffplay \
-    && make -j"$(nproc)" \
-    && make install \
-    && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -q libfdk_aac
-
-FROM alpine:3.22
-
-RUN apk add --no-cache \
-    x264-libs fdk-aac opus libssl3 libcrypto3 libgcc zlib tzdata \
-    && adduser -D -H -u 1000 protect
-
-COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
-RUN ffmpeg -hide_banner -encoders | grep -q libfdk_aac
+RUN adduser -D -H -u 1000 protect
 
 COPY --from=backend-builder /app/protect-homekit /protect-homekit
 COPY --from=frontend-builder /app/web/dist /web/dist

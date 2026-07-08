@@ -1,0 +1,74 @@
+name: Build ffmpeg base image
+
+# Builds pharndt/protect-ffmpeg (ffmpeg with libfdk_aac) as a multi-arch image.
+# Compiling ffmpeg is slow, so it lives here — built rarely on NATIVE runners
+# (no QEMU) — and the per-release app build just FROMs the result. Trigger
+# manually, or automatically when the ffmpeg Dockerfile changes.
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: FFmpeg git tag to build
+        required: false
+        default: n7.1
+  push:
+    branches: [main, feat/hksv]
+    paths:
+      - app/ffmpeg.Dockerfile
+      - .github/workflows/build-ffmpeg.yml
+
+env:
+  IMAGE: pharndt/protect-ffmpeg
+  FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || 'n7.1' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push per-arch tag
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          file: app/ffmpeg.Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            FFMPEG_VERSION=${{ env.FFMPEG_VERSION }}
+          tags: ${{ env.IMAGE }}:${{ env.FFMPEG_VERSION }}-${{ matrix.arch }}
+          push: true
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE}:${FFMPEG_VERSION}" \
+            -t "${IMAGE}:latest" \
+            "${IMAGE}:${FFMPEG_VERSION}-amd64" \
+            "${IMAGE}:${FFMPEG_VERSION}-arm64"
+          docker buildx imagetools inspect "${IMAGE}:${FFMPEG_VERSION}"
