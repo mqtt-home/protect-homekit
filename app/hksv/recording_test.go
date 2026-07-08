@@ -48,6 +48,9 @@ func TestFFmpegArgsReencodesWithAlignedKeyframes(t *testing.T) {
 	if v, _ := argValue(args, "-b:v"); v != "2000k" {
 		t.Fatalf("-b:v = %q, want 2000k", v)
 	}
+	if v, _ := argValue(args, "-preset"); v == "ultrafast" {
+		t.Fatal("preset must not be ultrafast: it forces CAVLC and downgrades H.264 to Baseline, which HKSV rejects when Main was negotiated")
+	}
 	if !strings.Contains(strings.Join(args, " "), "frag_keyframe") {
 		t.Fatal("movflags must include frag_keyframe")
 	}

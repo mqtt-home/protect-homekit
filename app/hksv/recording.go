@@ -249,9 +249,11 @@ func (r *recorder) ffmpegArgs(cfg SelectedConfig, audio bool, url string) []stri
 		"-pix_fmt", "yuv420p",
 		"-profile:v", h264ProfileName(cfg.Video.Profile),
 		"-level:v", h264LevelName(cfg.Video.Level),
-		// ultrafast keeps the persistent prebuffer re-encode within a Pi's CPU
-		// budget; recording quality/compression matters less than not stalling.
-		"-preset", "ultrafast",
+		// superfast is the fastest x264 preset that still honors the negotiated
+		// profile: ultrafast forces CAVLC (no CABAC) and silently downgrades the
+		// stream to Constrained Baseline, so HKSV rejects fragments whose actual
+		// profile doesn't match the Main profile it selected.
+		"-preset", "superfast",
 		"-bf", "0", // no B-frames: every fragment must start on an IDR
 		"-r", strconv.Itoa(fps),
 	}
