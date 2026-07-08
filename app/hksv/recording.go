@@ -193,7 +193,13 @@ func (r *recorder) runFFmpeg(ctx context.Context, cfg SelectedConfig, audio bool
 	if waitErr != nil {
 		return fmt.Errorf("ffmpeg: %v (%s)", waitErr, tail.String())
 	}
-	return io.ErrUnexpectedEOF // stream ended without error -> restart
+	// ffmpeg exited without an error but the stream ended (e.g. the RTSP source
+	// dropped because the re-encode fell behind). Surface the stderr tail so the
+	// cause is visible, then restart.
+	if s := tail.String(); s != "" {
+		return fmt.Errorf("%w (ffmpeg: %s)", io.ErrUnexpectedEOF, s)
+	}
+	return io.ErrUnexpectedEOF
 }
 
 // ffmpegArgs builds the prebuffer command: RTSPS in, H.264 re-encoded with
@@ -243,7 +249,9 @@ func (r *recorder) ffmpegArgs(cfg SelectedConfig, audio bool, url string) []stri
 		"-pix_fmt", "yuv420p",
 		"-profile:v", h264ProfileName(cfg.Video.Profile),
 		"-level:v", h264LevelName(cfg.Video.Level),
-		"-preset", "veryfast",
+		// ultrafast keeps the persistent prebuffer re-encode within a Pi's CPU
+		// budget; recording quality/compression matters less than not stalling.
+		"-preset", "ultrafast",
 		"-bf", "0", // no B-frames: every fragment must start on an IDR
 		"-r", strconv.Itoa(fps),
 	}

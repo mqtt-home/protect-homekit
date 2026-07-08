@@ -608,7 +608,7 @@ func (b *Bridge) buildCamera(cam protect.Camera) *CameraAccessory {
 			CameraName: cam.Name,
 			FFmpegPath: b.cfg.FFmpeg.Path,
 			Debug:      b.cfg.FFmpeg.Debug,
-			Resolve:    func(width int) (string, error) { return b.streamURL(id, width) },
+			Resolve:    func(width int) (string, error) { return b.recordingStreamURL(id, width) },
 			HasMotion:  b.cfg.Cameras.MotionSensorsEnabled(),
 			IsDoorbell: cam.IsDoorbell(),
 			HasMic:     b.cfg.FFmpeg.AudioEnabled() && (cam.FeatureFlags.HasMic || cam.IsMicEnabled),
@@ -640,6 +640,61 @@ func (b *Bridge) streamURL(cameraID string, width int) (string, error) {
 	logger.Debug("Selected channel", "camera", cam.Name, "channel", ch.Name,
 		"resolution", fmt.Sprintf("%dx%d", ch.Width, ch.Height), "requested_width", width)
 	return b.client.RTSPSURL(b.bootstrap, ch.RtspAlias), nil
+}
+
+// recordingMaxSourceWidth caps the source channel resolution used for HKSV
+// recording. Decoding a 4K channel and re-encoding it in real time overwhelms
+// constrained hardware (a Pi), so recording never pulls a channel wider than
+// this; the frame is then scaled to the resolution HomeKit selected.
+const recordingMaxSourceWidth = 1920
+
+// recordingStreamURL is like streamURL but for the HKSV prebuffer: it picks the
+// largest usable channel not exceeding recordingMaxSourceWidth (avoiding the 4K
+// channel), so the persistent re-encode stays within a Pi's CPU budget.
+func (b *Bridge) recordingStreamURL(cameraID string, width int) (string, error) {
+	b.stateMu.RLock()
+	defer b.stateMu.RUnlock()
+
+	cam, ok := b.camState[cameraID]
+	if !ok {
+		return "", fmt.Errorf("unknown camera %s", cameraID)
+	}
+	ch, ok := selectRecordingChannel(cam.Channels, recordingMaxSourceWidth)
+	if !ok {
+		return "", fmt.Errorf("no RTSP-enabled channel on %s", cam.Name)
+	}
+	logger.Debug("Selected recording channel", "camera", cam.Name, "channel", ch.Name,
+		"resolution", fmt.Sprintf("%dx%d", ch.Width, ch.Height), "target_width", width)
+	return b.client.RTSPSURL(b.bootstrap, ch.RtspAlias), nil
+}
+
+// selectRecordingChannel picks the largest usable channel whose width does not
+// exceed maxWidth (to bound decode/encode cost), falling back to the smallest
+// usable channel if every channel is wider than maxWidth.
+func selectRecordingChannel(channels []protect.Channel, maxWidth int) (protect.Channel, bool) {
+	var best protect.Channel
+	found := false
+	for _, ch := range channels {
+		if !ch.Enabled || !ch.IsRtspEnabled || ch.RtspAlias == "" {
+			continue
+		}
+		if ch.Width <= maxWidth && (!found || ch.Width > best.Width) {
+			best, found = ch, true
+		}
+	}
+	if found {
+		return best, true
+	}
+	// Every channel exceeds the cap: use the smallest one available.
+	for _, ch := range channels {
+		if !ch.Enabled || !ch.IsRtspEnabled || ch.RtspAlias == "" {
+			continue
+		}
+		if !found || ch.Width < best.Width {
+			best, found = ch, true
+		}
+	}
+	return best, found
 }
 
 // selectChannel returns the smallest usable channel that still satisfies the

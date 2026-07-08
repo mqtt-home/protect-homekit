@@ -104,3 +104,29 @@ func TestNormalizePin(t *testing.T) {
 func testConfig() config.Config {
 	return config.Config{}
 }
+
+func TestSelectRecordingChannelAvoids4K(t *testing.T) {
+	// Gartenhaus: High 4K, Medium 720p, Low 360p. Recording must pick Medium,
+	// not the 4K channel, to keep the re-encode within budget.
+	channels := []protect.Channel{
+		ch(0, 3840, 2160, true),
+		ch(1, 1280, 720, true),
+		ch(2, 640, 360, true),
+	}
+	got, ok := selectRecordingChannel(channels, recordingMaxSourceWidth)
+	if !ok || got.Width != 1280 {
+		t.Fatalf("expected 1280-wide Medium channel, got %dx%d ok=%v", got.Width, got.Height, ok)
+	}
+}
+
+func TestSelectRecordingChannelFallsBackToSmallest(t *testing.T) {
+	// All channels exceed the cap (e.g. only 4K/5K variants): use the smallest.
+	channels := []protect.Channel{
+		ch(0, 3840, 2160, true),
+		ch(1, 2560, 1440, true),
+	}
+	got, ok := selectRecordingChannel(channels, recordingMaxSourceWidth)
+	if !ok || got.Width != 2560 {
+		t.Fatalf("expected smallest (2560) when all exceed cap, got %d ok=%v", got.Width, ok)
+	}
+}
