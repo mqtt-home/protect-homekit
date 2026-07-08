@@ -90,6 +90,17 @@ type ServeMux interface {
 func NewServer(store Store, a *accessory.A, as ...*accessory.A) (*Server, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{Logger: log.Debug, NoColor: true}))
+	// Log every request line + response status at Info so pairing/connection
+	// failures are visible without enabling the (very chatty) HAP debug logger.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ww := middleware.NewWrapResponseWriter(w, req.ProtoMajor)
+			next.ServeHTTP(ww, req)
+			log.Info.Printf("HAP %s %s host=%q remote=%s cl=%s -> %d",
+				req.Method, req.URL.Path, req.Host, req.RemoteAddr,
+				req.Header.Get("Content-Length"), ww.Status())
+		})
+	})
 
 	st := &storer{store}
 	if err := migrate(st); err != nil {
@@ -107,6 +118,9 @@ func NewServer(store Store, a *accessory.A, as ...*accessory.A) (*Server, error)
 	s.ss = &http.Server{
 		Handler:   r,
 		ConnState: s.connStateEvent,
+		// Surface protocol-level rejections (malformed request line/headers,
+		// bad Host) which Go answers with an empty-body 400 before the handler.
+		ErrorLog: log.Info.Logger,
 	}
 
 	// Load the stored uuid or generate a new one.
