@@ -7,9 +7,10 @@ package hksv
 // controller opens a recording data stream, StartRecording replays the init
 // segment and the buffered prebuffer, then forwards live fragments.
 //
-// Video is copied (never transcoded), matching the rest of the bridge; only
-// audio, when enabled, is transcoded to AAC-LC (which stock ffmpeg supports,
-// unlike the Opus path used for live streaming).
+// Unlike live streaming (which copies video), recording re-encodes H.264 so it
+// can force a keyframe at every fragment boundary — HKSV requires each fMP4
+// fragment to start on an IDR. Audio, when enabled, is transcoded to AAC-LC
+// (which stock ffmpeg supports, unlike the Opus path used for live streaming).
 
 import (
 	"context"
@@ -195,8 +196,15 @@ func (r *recorder) runFFmpeg(ctx context.Context, cfg SelectedConfig, audio bool
 	return io.ErrUnexpectedEOF // stream ended without error -> restart
 }
 
-// ffmpegArgs builds the prebuffer command: RTSPS in, H.264 copy + optional AAC
-// audio, fragmented MP4 out to stdout.
+// ffmpegArgs builds the prebuffer command: RTSPS in, H.264 re-encoded with
+// keyframes aligned to the fragment length, plus optional AAC-LC audio,
+// fragmented MP4 out to stdout.
+//
+// HKSV requires every fMP4 fragment to begin with an IDR frame. Copying the
+// camera's H.264 can't guarantee that — Protect's keyframe cadence is irregular
+// and its high channel is often High profile while we advertise Main — so we
+// re-encode to the selected profile/level and force a keyframe exactly every
+// fragment (matching homebridge-unifi-protect's HKSV encoder).
 func (r *recorder) ffmpegArgs(cfg SelectedConfig, audio bool, url string) []string {
 	loglevel := "error"
 	if r.debug {
@@ -205,6 +213,20 @@ func (r *recorder) ffmpegArgs(cfg SelectedConfig, audio bool, url string) []stri
 	fragMS := cfg.FragmentLengthMS
 	if fragMS <= 0 {
 		fragMS = 4000
+	}
+	fragSec := float64(fragMS) / 1000
+
+	fps := cfg.Video.FrameRate
+	if fps <= 0 {
+		fps = 30
+	}
+	gop := fps * fragMS / 1000
+	if gop <= 0 {
+		gop = fps
+	}
+	bitrate := cfg.Video.BitrateKbps
+	if bitrate <= 0 {
+		bitrate = defaultVideoBitrateKbps(cfg.Video.Width, cfg.Video.Height)
 	}
 
 	args := []string{
@@ -217,14 +239,30 @@ func (r *recorder) ffmpegArgs(cfg SelectedConfig, audio bool, url string) []stri
 		"-rtsp_transport", "tcp",
 		"-i", url,
 		"-map", "0:v:0",
-		"-c:v", "copy",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-profile:v", h264ProfileName(cfg.Video.Profile),
+		"-level:v", h264LevelName(cfg.Video.Level),
+		"-preset", "veryfast",
+		"-bf", "0", // no B-frames: every fragment must start on an IDR
+		"-r", strconv.Itoa(fps),
 	}
+	if cfg.Video.Width > 0 && cfg.Video.Height > 0 {
+		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d", cfg.Video.Width, cfg.Video.Height))
+	}
+	args = append(args,
+		"-g", strconv.Itoa(gop),
+		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%g)", fragSec),
+		"-b:v", strconv.Itoa(bitrate)+"k",
+		"-maxrate", strconv.Itoa(bitrate)+"k",
+		"-bufsize", strconv.Itoa(2*bitrate)+"k",
+	)
 
 	if audio {
 		samplerate := sampleRateHz(cfg.Audio.SampleRate)
-		bitrate := cfg.Audio.MaxBitrate
-		if bitrate <= 0 {
-			bitrate = 64
+		abitrate := cfg.Audio.MaxBitrate
+		if abitrate <= 0 {
+			abitrate = 64
 		}
 		channels := cfg.Audio.Channels
 		if channels <= 0 {
@@ -236,19 +274,59 @@ func (r *recorder) ffmpegArgs(cfg SelectedConfig, audio bool, url string) []stri
 			"-profile:a", "aac_low",
 			"-ac", strconv.Itoa(channels),
 			"-ar", strconv.Itoa(samplerate),
-			"-b:a", strconv.Itoa(bitrate)+"k",
+			"-b:a", strconv.Itoa(abitrate)+"k",
 		)
 	}
 
 	args = append(args,
 		"-f", "mp4",
-		// empty_moov emits the init segment immediately; frag_keyframe starts
-		// each fragment on a keyframe so fragments are independently decodable.
-		"-movflags", "+empty_moov+default_base_moof+frag_keyframe+omit_tfhd_offset",
-		"-frag_duration", strconv.Itoa(fragMS*1000),
+		// empty_moov emits the init segment immediately; frag_keyframe starts a
+		// new fragment on each (now fragment-aligned) keyframe, so every fragment
+		// is independently decodable and begins with an IDR.
+		"-movflags", "+empty_moov+default_base_moof+frag_keyframe+skip_sidx+skip_trailer",
+		"-reset_timestamps", "1",
 		"pipe:1",
 	)
 	return args
+}
+
+// h264ProfileName maps the HKSV profile enum to the x264 profile name.
+func h264ProfileName(p byte) string {
+	switch p {
+	case H264ProfileBaseline:
+		return "baseline"
+	case H264ProfileHigh:
+		return "high"
+	default:
+		return "main"
+	}
+}
+
+// h264LevelName maps the HKSV level enum to the x264 level string.
+func h264LevelName(l byte) string {
+	switch l {
+	case H264Level31:
+		return "3.1"
+	case H264Level32:
+		return "3.2"
+	default:
+		return "4.0"
+	}
+}
+
+// defaultVideoBitrateKbps returns a reasonable recording bitrate when the
+// controller doesn't specify one, scaled to the selected resolution.
+func defaultVideoBitrateKbps(width, height int) int {
+	switch {
+	case width >= 1920 || height >= 1080:
+		return 3000
+	case width >= 1280 || height >= 720:
+		return 2000
+	case width >= 640:
+		return 800
+	default:
+		return 300
+	}
 }
 
 // setInit records the initialization segment for new subscribers.

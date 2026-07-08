@@ -47,6 +47,14 @@ type Server struct {
 	SetupId      string
 	Key          KeyPair // public and private key (generated and stored on disk)
 
+	// Responder, if set, is a shared dnssd responder used to announce this
+	// server's accessory instead of a private per-server one. Multiple servers
+	// on the same host MUST share a single responder (the caller runs its
+	// Respond loop); otherwise each opens its own :5353 socket and only one of
+	// them answers unicast mDNS queries, leaving all but one accessory
+	// undiscoverable. This mirrors HAP-NodeJS/ciao's process-wide responder.
+	Responder dnssd.Responder
+
 	st *storer        // stores data
 	ss *http.Server   // http server
 	a  *accessory.A   // main accessory
@@ -218,32 +226,47 @@ func (s *Server) listenAndServe(ctx context.Context) error {
 	s.port = i
 
 	// Announce the server using dnssd.
-	resp, err := dnssd.NewResponder()
-	if err != nil {
-		return fmt.Errorf("dnssd: %s", err)
-	}
-	s.responder = resp
-
 	service, err := s.service()
 	if err != nil {
 		return fmt.Errorf("dnssd: %s", err)
 	}
 
-	h, err := resp.Add(service)
-	if err != nil {
-		return err
+	// A shared responder (set by the caller) announces this accessory alongside
+	// others on the same host through one mDNS socket; its Respond loop is owned
+	// by the caller. Without one, fall back to a private responder for this
+	// server alone.
+	var dnsStop chan struct{}
+	if s.Responder != nil {
+		s.responder = s.Responder
+		h, err := s.responder.Add(service)
+		if err != nil {
+			return err
+		}
+		s.handle = h
+		defer s.responder.Remove(h)
+	} else {
+		resp, err := dnssd.NewResponder()
+		if err != nil {
+			return fmt.Errorf("dnssd: %s", err)
+		}
+		s.responder = resp
+
+		h, err := resp.Add(service)
+		if err != nil {
+			return err
+		}
+		s.handle = h
+
+		dnsCtx, dnsCancel := context.WithCancel(ctx)
+		defer dnsCancel()
+
+		dnsStop = make(chan struct{})
+		go func() {
+			resp.Respond(dnsCtx)
+			log.Debug.Println("dnssd responder stopped")
+			dnsStop <- struct{}{}
+		}()
 	}
-	s.handle = h
-
-	dnsCtx, dnsCancel := context.WithCancel(ctx)
-	defer dnsCancel()
-
-	dnsStop := make(chan struct{})
-	go func() {
-		resp.Respond(dnsCtx)
-		log.Debug.Println("dnssd responder stopped")
-		dnsStop <- struct{}{}
-	}()
 
 	log.Debug.Println("listening at", ln.Addr())
 
@@ -260,7 +283,9 @@ func (s *Server) listenAndServe(ctx context.Context) error {
 	}()
 
 	err = s.ss.Serve(ln)
-	<-dnsStop
+	if dnsStop != nil {
+		<-dnsStop
+	}
 	<-serverStop
 
 	return err

@@ -25,12 +25,13 @@ type streamInput func(width int) (url string, err error)
 
 // streamer relays a camera's RTSPS stream to HomeKit controllers via ffmpeg.
 // The H.264 video is copied without transcoding (Protect cameras already
-// produce HomeKit-compatible H.264), only audio is transcoded to Opus — this
-// keeps CPU usage near zero, even on a Raspberry Pi.
+// produce HomeKit-compatible H.264), only audio is transcoded to the codec the
+// controller selects (AAC-ELD or Opus) — this keeps CPU usage low.
 type streamer struct {
 	cameraName string
 	ffmpegPath string
 	audio      bool
+	aacEld     bool // ffmpeg can encode AAC-ELD (libfdk_aac present)
 	debug      bool
 	input      streamInput
 
@@ -44,11 +45,12 @@ type session struct {
 	cmd  *exec.Cmd
 }
 
-func newStreamer(cameraName, ffmpegPath string, audio, debug bool, input streamInput) *streamer {
+func newStreamer(cameraName, ffmpegPath string, audio, aacEld, debug bool, input streamInput) *streamer {
 	return &streamer{
 		cameraName: cameraName,
 		ffmpegPath: ffmpegPath,
 		audio:      audio,
+		aacEld:     aacEld,
 		debug:      debug,
 		input:      input,
 		sessions:   map[string]*session{},
@@ -167,33 +169,54 @@ func (s *streamer) ffmpegArgs(sess *session, inputURL string, video rtp.VideoPar
 			addr.IPAddr, addr.VideoRtpPort, addr.VideoRtpPort, mtu),
 	}
 
-	// Only Opus is advertised in the supported audio configuration, so a
-	// controller requesting audio always selects Opus.
-	if s.audio && audio.CodecType == rtp.AudioCodecType_Opus {
+	// The controller picks AAC-ELD (preferred) or Opus from the advertised
+	// codecs; encode whichever it selected.
+	if s.audio {
 		samplerate := "16000"
-		if audio.CodecParams.Samplerate == rtp.AudioCodecSampleRate24Khz {
+		switch audio.CodecParams.Samplerate {
+		case rtp.AudioCodecSampleRate24Khz:
 			samplerate = "24000"
-		} else if audio.CodecParams.Samplerate == rtp.AudioCodecSampleRate8Khz {
+		case rtp.AudioCodecSampleRate8Khz:
 			samplerate = "8000"
 		}
 
-		args = append(args,
-			"-map", "0:a:0?",
-			"-c:a", "libopus",
-			"-application", "lowdelay",
-			"-frame_duration", "20",
-			"-ac", "1",
-			"-ar", samplerate,
-			"-b:a", "24k",
-			"-payload_type", strconv.Itoa(int(audio.RTP.PayloadType)),
-			"-ssrc", strconv.Itoa(int(sess.resp.SsrcAudio)),
-			"-f", "rtp",
-			"-flush_packets", "1",
-			"-srtp_out_suite", "AES_CM_128_HMAC_SHA1_80",
-			"-srtp_out_params", sess.req.Audio.SrtpKey(),
-			fmt.Sprintf("srtp://%s:%d?rtcpport=%d&pkt_size=188",
-				addr.IPAddr, addr.AudioRtpPort, addr.AudioRtpPort),
-		)
+		var codecArgs []string
+		switch audio.CodecType {
+		case rtp.AudioCodecType_AAC_ELD:
+			// AAC-ELD needs libfdk_aac; ffmpeg packs it as RFC 3640
+			// mpeg4-generic, which is what HomeKit expects.
+			codecArgs = []string{
+				"-c:a", "libfdk_aac",
+				"-profile:a", "aac_eld",
+				"-ac", "1",
+				"-ar", samplerate,
+				"-b:a", "24k",
+			}
+		case rtp.AudioCodecType_Opus:
+			codecArgs = []string{
+				"-c:a", "libopus",
+				"-application", "lowdelay",
+				"-frame_duration", "20",
+				"-ac", "1",
+				"-ar", samplerate,
+				"-b:a", "24k",
+			}
+		}
+
+		if codecArgs != nil {
+			args = append(args, "-map", "0:a:0?")
+			args = append(args, codecArgs...)
+			args = append(args,
+				"-payload_type", strconv.Itoa(int(audio.RTP.PayloadType)),
+				"-ssrc", strconv.Itoa(int(sess.resp.SsrcAudio)),
+				"-f", "rtp",
+				"-flush_packets", "1",
+				"-srtp_out_suite", "AES_CM_128_HMAC_SHA1_80",
+				"-srtp_out_params", sess.req.Audio.SrtpKey(),
+				fmt.Sprintf("srtp://%s:%d?rtcpport=%d&pkt_size=188",
+					addr.IPAddr, addr.AudioRtpPort, addr.AudioRtpPort),
+			)
+		}
 	}
 
 	return args

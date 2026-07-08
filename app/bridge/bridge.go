@@ -1,18 +1,21 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/brutella/dnssd"
 	dlog "github.com/brutella/dnssd/log"
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
@@ -52,7 +55,15 @@ type Bridge struct {
 	servers    []*hapServer
 	standalone bool
 	bridgeAcc  *accessory.Bridge // bridged mode only
-	cancel     context.CancelFunc
+	// responder is the single mDNS responder shared by all standalone camera
+	// servers (nil in bridged mode). One responder per host is required so
+	// every camera is announced through one socket; see Server.Responder.
+	responder dnssd.Responder
+	// aacEld reports whether the ffmpeg binary can encode AAC-ELD (needs
+	// libfdk_aac). HKSV cameras advertise AAC-ELD streaming audio only when so,
+	// otherwise iOS would select a codec ffmpeg can't produce.
+	aacEld bool
+	cancel context.CancelFunc
 
 	cameras  map[string]*CameraAccessory // by Protect camera id
 	byAID    map[uint64]*CameraAccessory
@@ -160,6 +171,8 @@ func (b *Bridge) Start() error {
 	b.applyBootstrap(bs)
 
 	b.standalone = b.cfg.Cameras.SecureVideoEnabled()
+	b.aacEld = ffmpegSupportsEncoder(b.cfg.FFmpeg.Path, "libfdk_aac")
+	logger.Info("ffmpeg audio capability", "aac_eld", b.aacEld)
 
 	type builtCamera struct {
 		acc *CameraAccessory
@@ -190,7 +203,20 @@ func (b *Bridge) Start() error {
 
 	if b.standalone {
 		// One HAP server per camera. HKSV only works on standalone camera
-		// accessories, not bridged ones.
+		// accessories, not bridged ones. All camera servers announce through a
+		// single shared mDNS responder — with a responder per server only one
+		// camera would answer unicast queries and the rest stay unpairable.
+		resp, err := dnssd.NewResponder()
+		if err != nil {
+			return fmt.Errorf("create mDNS responder: %w", err)
+		}
+		b.responder = resp
+		go func() {
+			if err := resp.Respond(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("mDNS responder stopped", "error", err)
+			}
+		}()
+
 		for i, bc := range built {
 			if err := b.startCameraServer(ctx, bc.acc, bc.cam, i); err != nil {
 				return err
@@ -287,6 +313,9 @@ func (b *Bridge) startCameraServer(ctx context.Context, acc *CameraAccessory, ca
 	server.Pin = normalizePin(b.cfg.HomeKit.Pin)
 	server.Protocol = hapProtocolVersion
 	server.SetupId = setupID
+	// Announce through the bridge's shared responder so all cameras coexist on
+	// this host (see Bridge.responder).
+	server.Responder = b.responder
 	if port > 0 {
 		server.Addr = fmt.Sprintf(":%d", port)
 	}
@@ -533,6 +562,18 @@ func (b *Bridge) ensureRTSP(bs *protect.Bootstrap) (*protect.Bootstrap, error) {
 	return b.client.Bootstrap()
 }
 
+// ffmpegSupportsEncoder reports whether the ffmpeg binary was built with the
+// named encoder (e.g. "libfdk_aac", required to produce AAC-ELD). Queried once
+// at startup so cameras only advertise codecs ffmpeg can actually encode.
+func ffmpegSupportsEncoder(ffmpegPath, encoder string) bool {
+	out, err := exec.Command(ffmpegPath, "-hide_banner", "-loglevel", "quiet", "-encoders").Output()
+	if err != nil {
+		logger.Warn("Could not query ffmpeg encoders", "ffmpeg", ffmpegPath, "error", err)
+		return false
+	}
+	return bytes.Contains(out, []byte(encoder))
+}
+
 func (b *Bridge) hasUsableChannel(cam protect.Camera) bool {
 	for _, ch := range cam.Channels {
 		if ch.Enabled && ch.IsRtspEnabled && ch.RtspAlias != "" {
@@ -544,7 +585,7 @@ func (b *Bridge) hasUsableChannel(cam protect.Camera) bool {
 
 func (b *Bridge) buildCamera(cam protect.Camera) *CameraAccessory {
 	id := cam.ID
-	str := newStreamer(cam.Name, b.cfg.FFmpeg.Path, b.cfg.FFmpeg.AudioEnabled(), b.cfg.FFmpeg.Debug,
+	str := newStreamer(cam.Name, b.cfg.FFmpeg.Path, b.cfg.FFmpeg.AudioEnabled(), b.aacEld, b.cfg.FFmpeg.Debug,
 		func(width int) (string, error) {
 			return b.streamURL(id, width)
 		})

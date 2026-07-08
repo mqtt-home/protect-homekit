@@ -1,7 +1,42 @@
+# Build ffmpeg with libfdk_aac so cameras can stream AAC-ELD — HomeKit's native
+# camera audio codec, which iOS wants for Secure Video. Alpine's stock ffmpeg
+# omits libfdk_aac (non-free license), so we compile ffmpeg against Alpine's
+# fdk-aac/x264/opus dev packages. Only ffmpeg itself is built from source; the
+# codecs come from apk, keeping the build tractable.
+FROM alpine:3.22 AS ffmpeg-builder
+
+ARG FFMPEG_VERSION=n7.1
+
+RUN apk add --no-cache \
+    build-base pkgconf nasm yasm git \
+    x264-dev fdk-aac-dev opus-dev openssl-dev zlib-dev
+
+RUN git clone --depth 1 --branch "${FFMPEG_VERSION}" https://github.com/FFmpeg/FFmpeg.git /ffmpeg-src \
+    && cd /ffmpeg-src \
+    && ./configure \
+        --prefix=/usr/local \
+        --enable-gpl --enable-nonfree --enable-version3 \
+        --enable-libx264 --enable-libfdk-aac --enable-libopus \
+        --enable-openssl \
+        --disable-doc --disable-ffplay \
+    && make -j"$(nproc)" \
+    && make install \
+    && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -q libfdk_aac
+
+# Runtime image.
 FROM alpine:3.22
 
-RUN apk add --no-cache ffmpeg tzdata && \
-    adduser -D -H -u 1000 protect
+# Shared libraries the compiled ffmpeg links against (same Alpine version as the
+# builder, so ABI matches). tzdata for local timestamps.
+RUN apk add --no-cache \
+    x264-libs fdk-aac opus libssl3 libcrypto3 libgcc zlib tzdata \
+    && adduser -D -H -u 1000 protect
+
+COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+
+# Fail the build (not at runtime) if the binary can't load or lacks AAC-ELD.
+RUN ffmpeg -hide_banner -encoders | grep -q libfdk_aac
 
 COPY protect-homekit /protect-homekit
 COPY web/dist /web/dist
