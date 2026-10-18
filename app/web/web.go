@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,14 +81,36 @@ func (ws *WebServer) setupRoutes() {
 	// SPA: serve static files, fall back to index.html for client-side routes.
 	distDir := "./web/dist/"
 	fileServer := http.FileServer(http.Dir(distDir))
-	ws.router.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
-		path := "." + r.URL.Path
-		if _, err := http.Dir(distDir).Open(path); err == nil {
-			fileServer.ServeHTTP(w, r)
+	ws.router.HandleFunc("/*", spaHandler(distDir, fileServer))
+}
+
+// spaHandler serves the built web UI. Hashed files under /assets/ are cached
+// forever; everything else (index.html, the SPA fallback) must be revalidated
+// so a new build is picked up. A missing /assets/ file is a 404 rather than
+// index.html: answering a stale CSS/JS hash with HTML makes the browser drop
+// the stylesheet and render the page unstyled.
+func spaHandler(distDir string, fileServer http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if f, err := http.Dir(distDir).Open(r.URL.Path); err == nil {
+			st, _ := f.Stat()
+			f.Close()
+			if st != nil && !st.IsDir() {
+				if strings.HasPrefix(r.URL.Path, "/assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, distDir+"index.html")
-	})
+	}
 }
 
 func (ws *WebServer) info(w http.ResponseWriter, _ *http.Request) {
