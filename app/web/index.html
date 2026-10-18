@@ -11,7 +11,13 @@
     <title>Kameras</title>
     <script>
       // Before first paint, so a dark-mode phone never flashes white.
-      var dark = matchMedia('(prefers-color-scheme: dark)').matches
+      // The Wall Display app (wall-display2) sets data-embed before any script
+      // runs; older builds only identify through the user agent.
+      var root = document.documentElement
+      if (!root.dataset.embed && / WallDisplay\//.test(navigator.userAgent)) root.dataset.embed = 'wall-display'
+      var embedded = root.dataset.embed === 'wall-display'
+      // Embedded in the panel: always dark, it draws a dark gradient behind us.
+      var dark = embedded || matchMedia('(prefers-color-scheme: dark)').matches
       if (dark) document.documentElement.classList.add('dark')
       document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     </script>

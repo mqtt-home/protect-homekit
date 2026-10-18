@@ -421,3 +421,70 @@
     .tile, .action, .pin, .btn { transition: none; }
   }
 }
+/* Wall Display embed mode: the iPad panel (wall-display2) opens this app in an
+   iframe over its own dark gradient. Gated on html[data-embed="wall-display"]
+   (index.html also sets it for the "WallDisplay/" user agent); normal browsers
+   are unaffected. */
+/* The panel's own design tokens. The app injects them at document start
+   (<style id="wall-display-tokens">); these literals are the fallback for older
+   app builds and the UA-only case, at zero specificity so the injected ones win. */
+:where(:root[data-embed="wall-display"]) {
+  --wd-backdrop: radial-gradient(1400px circle at top right, rgba(255, 255, 255, .18), transparent 50%), linear-gradient(to bottom right, rgba(255, 158, 102, .55), rgba(184, 89, 158, .55)), #000;
+  --wd-surface: rgba(28, 28, 30, .38);
+  --wd-surface-filter: blur(24px) saturate(180%);
+  --wd-surface-raised: rgba(44, 44, 46, .55);
+  --wd-stroke: rgba(255, 255, 255, .08);
+  --wd-stroke-active: rgba(255, 255, 255, .16);
+  --wd-radius-card: 20px; --wd-radius-tile: 18px; --wd-radius-control: 12px;
+  --wd-page-padding: 20px; --wd-gap: 16px; --wd-card-padding: 18px; --wd-tile-padding: 16px;
+  --wd-text: #ffffff; --wd-text-secondary: rgba(235, 235, 245, .6); --wd-text-tertiary: rgba(235, 235, 245, .3);
+  --wd-accent: rgba(10, 132, 255, 1);
+  --wd-font: -apple-system, system-ui, sans-serif;
+  --wd-title-size: 34px; --wd-tile-title-size: 16px; --wd-tap-target: 44px;
+}
+/* Our tokens on the panel's: translucent surfaces, hairline strokes, no
+   shadows, no tinted canvas. */
+:root[data-embed="wall-display"] {
+  color-scheme: dark;
+  --canvas: transparent;
+  --canvas-mesh: none;
+  --surface: var(--wd-surface);
+  --surface-2: var(--wd-surface-raised);
+  --sunken: var(--wd-surface-raised);
+  --surface-gradient: var(--wd-surface);
+  --surface-gradient-raised: var(--wd-surface);
+  --hero-bg: var(--wd-surface);
+  --line: var(--wd-stroke);
+  --line-2: var(--wd-stroke);
+  --highlight: 0 0 #0000;
+  --elevation-1: 0 0 #0000; --elevation-2: 0 0 #0000; --elevation-3: 0 0 #0000;
+  --press: 0 0 #0000; --inset-track: 0 0 #0000; --ico-hl: transparent;
+  --ink: var(--wd-text); --ink-2: var(--wd-text-secondary); --ink-3: var(--wd-text-secondary); --ink-4: var(--wd-text-tertiary);
+  --hero-ink: var(--wd-text); --hero-ink-2: var(--wd-text-secondary);
+  --accent: var(--wd-accent); --accent-ink: var(--wd-accent);
+  --accent-soft: color-mix(in srgb, var(--wd-accent) 16%, transparent); --focus: color-mix(in srgb, var(--wd-accent) 40%, transparent);
+  --r-lg: var(--wd-radius-card); --r-md: var(--wd-radius-tile);
+}
+:root[data-embed="wall-display"], :root[data-embed="wall-display"] body, :root[data-embed="wall-display"] #root { background: transparent; }
+:root[data-embed="wall-display"] body { font-family: var(--wd-font); }
+:root[data-embed="wall-display"] .px-safe { padding-left: var(--wd-page-padding); padding-right: var(--wd-page-padding); }
+:root[data-embed="wall-display"] .top-bar { background: transparent; border-bottom-color: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+:root[data-embed="wall-display"] :is(.card, .pill, .btn, .field) {
+  backdrop-filter: var(--wd-surface-filter); -webkit-backdrop-filter: var(--wd-surface-filter); box-shadow: none;
+}
+:root[data-embed="wall-display"] .card { background: var(--wd-surface); border: 1px solid var(--wd-stroke); }
+:root[data-embed="wall-display"] .card-h { padding: var(--wd-card-padding) var(--wd-card-padding) 0; }
+:root[data-embed="wall-display"] .card-b { padding: 12px var(--wd-card-padding) var(--wd-card-padding); }
+:root[data-embed="wall-display"] .ico { background: transparent; box-shadow: none; }
+/* pills, fields, controls */
+:root[data-embed="wall-display"] :is(.pill, .field, .btn, .seg) { background: var(--wd-surface-raised); border-color: var(--wd-stroke); border-radius: var(--wd-radius-control); }
+:root[data-embed="wall-display"] .seg button[aria-pressed="true"] { background: var(--wd-stroke-active); box-shadow: none; }
+:root[data-embed="wall-display"] .btn.primary { background: var(--wd-accent); color: #fff; border-color: transparent; }
+/* Arm's length on a wall: every target at least 44pt, no hover-only cues. */
+:root[data-embed="wall-display"] .seg button { height: 44px; min-width: 48px; }
+:root[data-embed="wall-display"] .sec-title button.h { min-height: 44px; }
+:root[data-embed="wall-display"] .btn:hover { box-shadow: none; }
+/* cameras: stats and camera cards on the panel's surfaces; snapshots stay as they are */
+:root[data-embed="wall-display"] .stat { background: var(--wd-surface); border: 1px solid var(--wd-stroke); border-radius: var(--wd-radius-tile); box-shadow: none; backdrop-filter: var(--wd-surface-filter); -webkit-backdrop-filter: var(--wd-surface-filter); }
+:root[data-embed="wall-display"] .cam.motion { border-color: color-mix(in oklab, var(--alert) 45%, transparent); box-shadow: 0 0 0 3px var(--alert-soft); }
+:root[data-embed="wall-display"] .pairing img { box-shadow: none; }
