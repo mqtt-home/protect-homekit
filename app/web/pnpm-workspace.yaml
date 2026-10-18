@@ -1,4 +1,9 @@
+# Supply chain: never resolve a version that has been public for less than a
+# week (value in minutes). Most malicious releases are pulled within days.
+minimumReleaseAge: 10080
+
 # pnpm 11 blocks dependency build scripts by default; allow esbuild's so the
-# vite build works.
+# vite build works. (Replaces the pre-v11 `onlyBuiltDependencies` list, which
+# pnpm 11 silently ignores.)
 allowBuilds:
   esbuild: true

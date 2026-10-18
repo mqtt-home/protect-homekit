@@ -11,3 +11,5 @@ config.test.yaml
 hap/
 hap-test/
 *.hap
+app/web/vite.config.d.ts
+app/web/vite.config.js

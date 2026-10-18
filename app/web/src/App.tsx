@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Activity, Camera as CameraIcon, History, CircleCheck, Play, QrCode, Square, Video, X } from 'lucide-react'
 import { liveSupported, startLive, type LiveSession } from './live'
+import { LANGS, useI18n } from '@/lib/i18n'
 
 const API = './api'
 
@@ -24,7 +26,7 @@ interface Camera {
   last_ring: number
   doorbell: boolean
   codec: string
-  channels: Channel[]
+  channels: Channel[] | null
 }
 
 interface Info {
@@ -37,12 +39,19 @@ interface Info {
   healthy: boolean
 }
 
+// Read the backend defensively: one null where a list is expected blanks the page.
+const list = <T,>(xs: T[] | null | undefined): T[] => (Array.isArray(xs) ? xs : [])
+
+const tint = (c: string) => ({ ['--c' as string]: c }) as React.CSSProperties
+
 function useCameras() {
   const [cameras, setCameras] = useState<Record<string, Camera>>({})
   const [connected, setConnected] = useState(false)
   const sourceRef = useRef<EventSource | null>(null)
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const connect = useCallback(() => {
+    if (retryRef.current) clearTimeout(retryRef.current)
     sourceRef.current?.close()
     const source = new EventSource(`${API}/events`)
     sourceRef.current = source
@@ -51,7 +60,7 @@ function useCameras() {
     source.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
-        if (data.type === 'camera' && typeof data.id === 'string') {
+        if (data && data.type === 'camera' && typeof data.id === 'string') {
           setCameras((prev) => ({ ...prev, [data.id]: data as Camera }))
         }
       } catch {
@@ -61,33 +70,44 @@ function useCameras() {
     source.onerror = () => {
       setConnected(false)
       source.close()
-      setTimeout(connect, 5000)
+      retryRef.current = setTimeout(connect, 5000)
     }
   }, [])
 
   useEffect(() => {
     connect()
-    return () => sourceRef.current?.close()
+    return () => {
+      if (retryRef.current) clearTimeout(retryRef.current)
+      sourceRef.current?.close()
+    }
   }, [connect])
 
-  return { cameras: Object.values(cameras).sort((a, b) => a.name.localeCompare(b.name)), connected }
+  return {
+    cameras: Object.values(cameras).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '')),
+    connected,
+    reconnect: connect,
+  }
 }
 
-function timeAgo(ms: number): string {
-  if (!ms) return '–'
-  const seconds = Math.floor((Date.now() - ms) / 1000)
-  if (seconds < 5) return 'now'
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.floor(hours / 24)}d ago`
+function LangSwitch() {
+  const { lang, setLang, t } = useI18n()
+  return (
+    <div className="seg" role="group" aria-label={t('language')}>
+      {LANGS.map((l) => (
+        <button key={l} type="button" aria-pressed={lang === l} onClick={() => setLang(l)}>
+          {l.toUpperCase()}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function CameraCard({ camera }: { camera: Camera }) {
+  const { t, ago, when } = useI18n()
+
   // Refresh the snapshot periodically and immediately on motion.
   const [tick, setTick] = useState(() => Date.now())
+  const [snapFailed, setSnapFailed] = useState(false)
   useEffect(() => {
     const interval = setInterval(() => setTick(Date.now()), 10_000)
     return () => clearInterval(interval)
@@ -96,7 +116,7 @@ function CameraCard({ camera }: { camera: Camera }) {
     if (camera.motion) setTick(Date.now())
   }, [camera.motion, camera.last_motion])
 
-  // Live playback: click the tile to start/stop the fMP4 stream.
+  // Live playback: tap the picture to start/stop the fMP4 stream.
   const [live, setLive] = useState(false)
   const [liveError, setLiveError] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -114,69 +134,140 @@ function CameraCard({ camera }: { camera: Camera }) {
       session.stop()
       sessionRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, camera.id])
 
   const toggleLive = () => {
     if (!camera.online) return
     if (!liveSupported()) {
-      setLiveError('live view not supported in this browser')
+      setLiveError(t('cam.unsupported'))
       return
     }
     setLive((v) => !v)
   }
 
-  const best = camera.channels.find((c) => c.rtsp) ?? camera.channels[0]
+  const channels = list(camera.channels)
+  const best = channels.find((c) => c.rtsp) ?? channels[0]
+  const hasRing = camera.doorbell || camera.last_ring > 0
 
   return (
-    <div className={`card ${camera.motion ? 'card-motion' : ''}`}>
-      <div className={`snapshot ${camera.online ? 'clickable' : ''}`} onClick={toggleLive} title={live ? 'Stop live view' : 'Start live view'}>
-        {live ? (
-          <video ref={videoRef} muted autoPlay playsInline />
-        ) : camera.online ? (
-          <img src={`${API}/cameras/${camera.id}/snapshot?w=640&t=${tick}`} alt={camera.name} loading="lazy" />
-        ) : (
-          <div className="offline-placeholder">offline</div>
-        )}
-        {live && <span className="badge badge-live">LIVE</span>}
-        {!live && camera.online && <span className="play-hint">▶</span>}
-        {camera.motion && <span className="badge badge-motion">MOTION</span>}
-        {!camera.online && <span className="badge badge-offline">OFFLINE</span>}
-        {liveError && !live && <span className="live-error">{liveError}</span>}
-      </div>
-      <div className="card-body">
-        <div className="card-title">
-          <span className={`dot ${camera.online ? 'dot-on' : 'dot-off'}`} />
-          {camera.name}
-          {camera.doorbell && <span className="tag">doorbell</span>}
+    <article className={`card cam${camera.motion ? ' motion' : ''}`}>
+      {camera.online ? (
+        <button
+          type="button"
+          className="shot"
+          onClick={toggleLive}
+          aria-label={live ? t('cam.stopLive') : t('cam.startLive')}
+          title={live ? t('cam.stopLive') : t('cam.startLive')}
+        >
+          {live ? (
+            <video ref={videoRef} muted autoPlay playsInline />
+          ) : (
+            <img
+              src={`${API}/cameras/${camera.id}/snapshot?w=640&t=${tick}`}
+              alt={camera.name}
+              loading="lazy"
+              style={snapFailed ? { visibility: 'hidden' } : undefined}
+              onError={() => setSnapFailed(true)}
+              onLoad={() => setSnapFailed(false)}
+            />
+          )}
+          {!live && snapFailed && (
+            <span className="absolute inset-0 grid place-items-center text-sm" style={{ color: '#8B95A7' }}>
+              {t('cam.snapshotFailed')}
+            </span>
+          )}
+          <span className="ov">
+            {live && <span className="chip"><span className="dot live" style={tint('var(--ok)')} />{t('cam.live')}</span>}
+            {camera.motion && <span className="chip"><span className="dot live" style={tint('var(--alert)')} />{t('cam.motion')}</span>}
+          </span>
+          <span className="play">{live ? <Square /> : <Play />}</span>
+          {liveError && !live && <span className="err">{liveError}</span>}
+        </button>
+      ) : (
+        <div className="shot off">{t('cam.offline')}</div>
+      )}
+      <div className="card-b space-y-1" style={{ paddingTop: 12 }}>
+        <div className="flex items-center gap-2">
+          <span className={`dot${camera.online ? '' : ' bad'}`} />
+          <h3 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{camera.name}</h3>
+          {camera.doorbell && <span className="chip info">{t('cam.doorbell')}</span>}
+          {!camera.online && <span className="chip alert">{t('cam.offline')}</span>}
         </div>
-        <div className="card-meta">
+        <div className="meta num">
           {camera.model}
-          {best && ` · ${best.width}×${best.height}@${best.fps}`}
-          {camera.codec && ` · ${camera.codec}`}
+          {best && ` · ${best.width}×${best.height} @ ${best.fps} fps`}
+          {camera.codec && ` · ${camera.codec.toUpperCase()}`}
         </div>
-        <div className="card-meta">
-          motion {timeAgo(camera.last_motion)}
-          {camera.doorbell && ` · ring ${timeAgo(camera.last_ring)}`}
+        <div className="meta num flex flex-wrap gap-x-3">
+          <span title={when(camera.last_motion)}>{t('cam.lastMotion', { ago: ago(camera.last_motion) })}</span>
+          {hasRing && <span title={when(camera.last_ring)}>{t('cam.lastRing', { ago: ago(camera.last_ring) })}</span>}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function Stats({ cameras, info }: { cameras: Camera[]; info: Info | null }) {
+  const { t, num, ago } = useI18n()
+  const online = cameras.filter((c) => c.online).length
+  const moving = cameras.filter((c) => c.motion).length
+  const last = cameras.reduce((m, c) => Math.max(m, c.last_motion || 0), 0)
+  return (
+    <div className="stats">
+      <div className={`stat${online < cameras.length ? ' warn' : ''}`}>
+        <div className="k"><CameraIcon />{t('stat.cameras')}</div>
+        <div className="v">{num(online)}</div>
+        <div className="s num">{t('stat.online', { ok: num(online), n: num(cameras.length) })}</div>
+      </div>
+      <div className={`stat${moving > 0 ? ' alert' : ''}`}>
+        <div className="k"><Activity />{t('stat.motion')}</div>
+        <div className="v">{num(moving)}</div>
+        <div className="s">{moving > 0 ? t('stat.motionNow') : t('stat.motionNone')}</div>
+      </div>
+      <div className="stat">
+        <div className="k"><History />{t('stat.last')}</div>
+        <div className="v small">{last ? ago(last) : '–'}</div>
+      </div>
+      <div className={`stat${info && !info.healthy ? ' alert' : ''}`}>
+        <div className="k"><CircleCheck />{t('stat.homekit')}</div>
+        <div className="v small" style={info?.healthy ? { color: 'var(--ok)' } : undefined}>
+          {info ? (info.healthy ? t('stat.healthy') : t('stat.unhealthy')) : '–'}
         </div>
       </div>
     </div>
   )
 }
 
+function Pairing({ info }: { info: Info }) {
+  const { t } = useI18n()
+  return (
+    <section className="card card-b pairing" style={{ paddingTop: 16 }}>
+      <img src={`${API}/qr`} alt={t('pairing.qr')} width={168} height={168} />
+      <div className="min-w-0" style={{ flex: '1 1 220px' }}>
+        <div className="text-sm text-muted-foreground">{t('pairing.code')}</div>
+        <div className="setup-code">{info.pin}</div>
+        <p className="mt-2 text-sm" style={{ color: 'var(--ink-2)' }}>{t('pairing.hint')}</p>
+      </div>
+    </section>
+  )
+}
+
 export default function App() {
-  const { cameras, connected } = useCameras()
+  const { t } = useI18n()
+  const { cameras, connected, reconnect } = useCameras()
   const [info, setInfo] = useState<Info | null>(null)
   const [showPairing, setShowPairing] = useState(false)
 
   useEffect(() => {
     fetch(`${API}/info`)
       .then((r) => r.json())
-      .then(setInfo)
+      .then((d) => {
+        if (d && typeof d === 'object') setInfo(d as Info)
+      })
       .catch(() => {})
   }, [])
 
-  // Re-render every 30s so the "x minutes ago" labels stay fresh.
+  // Re-render every 30s so the "vor x min" labels stay fresh.
   const [, setNow] = useState(0)
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 30_000)
@@ -184,33 +275,66 @@ export default function App() {
   }, [])
 
   return (
-    <div className="app">
-      <header>
-        <div>
-          <h1>{info?.bridge ?? 'Protect HomeKit'}</h1>
-          <div className="subtitle">
-            {info?.nvr && `${info.nvr} · Protect ${info.nvr_version} · `}
-            <span className={`dot ${connected ? 'dot-on' : 'dot-off'}`} /> {connected ? 'live' : 'reconnecting…'}
+    <div className="min-h-screen">
+      <header className="top-bar">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-safe py-3">
+          <span className="ico"><Video /></span>
+          <div className="min-w-0 flex-1">
+            <h1 className="app-tt">{t('title')}</h1>
+            {connected ? (
+              <div className="app-st">
+                <span className="dot live" />
+                <span className="num truncate">
+                  {t('conn.live')}
+                  {info?.nvr ? ` · ${t('nvr', { nvr: info.nvr, version: info.nvr_version })}` : ''}
+                </span>
+              </div>
+            ) : (
+              <button type="button" className="app-st" onClick={reconnect} title={t('conn.reconnect')}>
+                <span className="dot idle" />
+                <span className="truncate">{t('conn.connecting')}</span>
+              </button>
+            )}
           </div>
+          {info && (
+            <button
+              type="button"
+              className="btn"
+              aria-pressed={showPairing}
+              aria-label={showPairing ? t('pairing.close') : t('pairing')}
+              title={showPairing ? t('pairing.close') : t('pairing')}
+              onClick={() => setShowPairing((v) => !v)}
+            >
+              {showPairing ? <X className="h-4 w-4" /> : <QrCode className="h-4 w-4" />}
+              <span className="hidden sm:inline">{t('pairing')}</span>
+            </button>
+          )}
+          <LangSwitch />
         </div>
-        <button onClick={() => setShowPairing((v) => !v)}>{showPairing ? 'Close' : 'Pair'}</button>
       </header>
 
-      {showPairing && info && (
-        <div className="pairing">
-          <img src={`${API}/qr`} alt="HomeKit pairing QR code" width={200} height={200} />
-          <div>
-            <div className="pairing-hint">Scan with the Home app or enter the setup code:</div>
-            <div className="pin">{info.pin}</div>
-          </div>
-        </div>
-      )}
+      <main
+        className="mx-auto max-w-5xl space-y-6 px-safe pt-5"
+        style={{ paddingBottom: 'calc(2.5rem + env(safe-area-inset-bottom))' }}
+      >
+        {showPairing && info && <Pairing info={info} />}
 
-      <main className="grid">
-        {cameras.map((camera) => (
-          <CameraCard key={camera.id} camera={camera} />
-        ))}
-        {cameras.length === 0 && <div className="empty">Waiting for cameras…</div>}
+        <Stats cameras={cameras} info={info} />
+
+        <section>
+          <div className="sec-title">
+            <h2>{t('cameras')}</h2>
+          </div>
+          {cameras.length === 0 ? (
+            <div className="card card-b text-sm text-muted-foreground" style={{ paddingTop: 14 }}>{t('cameras.waiting')}</div>
+          ) : (
+            <div className="cams">
+              {cameras.map((camera) => (
+                <CameraCard key={camera.id} camera={camera} />
+              ))}
+            </div>
+          )}
+        </section>
       </main>
     </div>
   )
