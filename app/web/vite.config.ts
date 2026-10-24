@@ -1,10 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { homeUi } from '@mqtt-home/ui/vite'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // homeUi: dark mode + Wall Display detection before first paint
+  plugins: [react(), tailwindcss(), homeUi()],
   // Relative asset paths so the build works behind any ingress path.
   base: './',
   resolve: {

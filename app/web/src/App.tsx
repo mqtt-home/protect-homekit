@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, Camera as CameraIcon, History, CircleCheck, Play, QrCode, Square, Video, X } from 'lucide-react'
 import { liveSupported, startLive, type LiveSession } from './live'
-import { LANGS, useI18n } from '@/lib/i18n'
+import { LangSwitch, useI18n } from '@/lib/i18n'
 
 const API = './api'
 
@@ -87,19 +87,6 @@ function useCameras() {
     connected,
     reconnect: connect,
   }
-}
-
-function LangSwitch() {
-  const { lang, setLang, t } = useI18n()
-  return (
-    <div className="seg" role="group" aria-label={t('language')}>
-      {LANGS.map((l) => (
-        <button key={l} type="button" aria-pressed={lang === l} onClick={() => setLang(l)}>
-          {l.toUpperCase()}
-        </button>
-      ))}
-    </div>
-  )
 }
 
 function CameraCard({ camera }: { camera: Camera }) {

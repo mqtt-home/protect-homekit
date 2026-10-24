@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/brutella/dnssd v1.2.14
 	github.com/brutella/hap v0.0.35
-	github.com/go-chi/chi/v5 v5.3.2
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-chi/cors v1.2.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/philipparndt/go-logger v1.10.0
