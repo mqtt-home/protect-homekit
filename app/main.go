@@ -11,9 +11,12 @@ import (
 
 	"github.com/mqtt-home/protect-homekit/bridge"
 	"github.com/mqtt-home/protect-homekit/config"
+	"github.com/mqtt-home/protect-homekit/mqttpub"
 	"github.com/mqtt-home/protect-homekit/version"
 	"github.com/mqtt-home/protect-homekit/web"
 	"github.com/philipparndt/go-logger"
+	gwconfig "github.com/philipparndt/mqtt-gateway/config"
+	"github.com/philipparndt/mqtt-gateway/mqtt"
 )
 
 func main() {
@@ -44,11 +47,34 @@ func main() {
 
 	b := bridge.New(cfg)
 
+	var listeners []func(bridge.CameraInfo)
+
 	var webServer *web.WebServer
 	if cfg.Web.Enabled {
 		webServer = web.NewWebServer(b, cfg.Web)
-		b.SetUpdateListener(webServer.BroadcastCamera)
+		listeners = append(listeners, webServer.BroadcastCamera)
 	}
+
+	var publisher *mqttpub.Publisher
+	if cfg.MQTT.Enabled() {
+		mqtt.Start(gwconfig.MQTTConfig{
+			URL:      cfg.MQTT.URL,
+			Username: cfg.MQTT.Username,
+			Password: cfg.MQTT.Password,
+			Topic:    cfg.MQTT.Topic,
+			QoS:      cfg.MQTT.QoS,
+			Retain:   true,
+		}, "protect_homekit")
+		publisher = mqttpub.New(cfg.MQTT.Topic, mqtt.PublishAbsolute)
+		listeners = append(listeners, publisher.OnCamera)
+		logger.Info("Publishing camera state to MQTT", "topic", cfg.MQTT.Topic)
+	}
+
+	b.SetUpdateListener(func(info bridge.CameraInfo) {
+		for _, l := range listeners {
+			l(info)
+		}
+	})
 
 	if err := b.Start(); err != nil {
 		logger.Error("Failed to start bridge", "error", err)
@@ -65,6 +91,13 @@ func main() {
 		}()
 	}
 
+	// Retained state for every camera, also for the ones that stay quiet.
+	if publisher != nil {
+		for _, info := range b.CameraInfos() {
+			publisher.OnCamera(info)
+		}
+	}
+
 	logger.Info("Application ready")
 
 	quitChannel := make(chan os.Signal, 1)
@@ -72,6 +105,10 @@ func main() {
 	<-quitChannel
 
 	b.Stop()
+	if publisher != nil {
+		publisher.Close()
+		mqtt.Stop()
+	}
 	logger.Info("Shutdown complete")
 }
 

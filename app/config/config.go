@@ -18,9 +18,24 @@ type Config struct {
 	Cameras  CamerasConfig `json:"cameras"`
 	FFmpeg   FFmpegConfig  `json:"ffmpeg"`
 	Web      WebConfig     `json:"web"`
+	MQTT     MQTTConfig    `json:"mqtt"`
 	Pprof    PprofConfig   `json:"pprof"`
 	LogLevel string        `json:"loglevel,omitempty"`
 }
+
+// MQTTConfig publishes camera state, motion and ring events to an MQTT
+// broker. Optional: without a url nothing connects.
+type MQTTConfig struct {
+	// URL of the broker, e.g. "tcp://192.168.1.2:1883".
+	URL      string `json:"url,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	// Topic is the base topic, defaults to "home/protect".
+	Topic string `json:"topic,omitempty"`
+	QoS   byte   `json:"qos,omitempty"`
+}
+
+func (c MQTTConfig) Enabled() bool { return c.URL != "" }
 
 // WebConfig enables the status/monitoring web UI (camera overview, pairing
 // QR code, SSE live updates).
@@ -213,6 +228,9 @@ func LoadConfig(file string) (Config, error) {
 	}
 	if cfg.FFmpeg.Path == "" {
 		cfg.FFmpeg.Path = "ffmpeg"
+	}
+	if cfg.MQTT.Topic == "" {
+		cfg.MQTT.Topic = "home/protect"
 	}
 	if cfg.Web.Port == 0 {
 		cfg.Web.Port = 8080

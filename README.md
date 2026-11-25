@@ -15,6 +15,8 @@ for small hosts like a Raspberry Pi running Kubernetes.
 - **Snapshots** for camera tiles, served from the NVR snapshot API with a
   short cache.
 - **Motion sensors** fed by the Protect realtime websocket.
+- **MQTT** (optional): camera state, motion and ring events for automations
+  outside HomeKit.
 - **Doorbells** (G4 Doorbell etc.) appear as HomeKit video doorbells and ring
   in the Home app.
 - Automatic RTSPS stream activation in Protect (optional).
@@ -70,6 +72,22 @@ homekit:
 ```
 
 `${NAME}` placeholders are replaced with environment variables.
+
+### MQTT
+
+With an `mqtt.url` the bridge also publishes what it learns from Protect:
+
+| Topic | Payload | Retained |
+|---|---|---|
+| `<topic>/<camera>` | `{"name":"Front Door","online":true,"motion":false,"last_motion":"2026-11-25T06:33:38Z","last_ring":"…"}` | yes |
+| `<topic>/<camera>/motion` | `true` / `false`, when motion starts or ends | no |
+| `<topic>/<camera>/ring` | `true`, once per ring | no |
+| `<topic>/bridge/state` | `online` / `offline` | yes |
+
+`<topic>` defaults to `home/protect`; `<camera>` is the Protect name in lower
+case with dashes (`Front Door` → `front-door`). A camera only reports motion
+when motion detection is switched on for it in Protect. The broker has to be
+reachable at startup, otherwise the bridge exits and is restarted.
 
 > **Important:** `homekit.storage_dir` (default: `<config-dir>/hap`) holds the
 > pairing keys and must survive restarts — mount it on a persistent volume,

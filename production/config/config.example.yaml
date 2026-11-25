@@ -47,6 +47,18 @@ web:
   enabled: true
   port: 8080
 
+# Optional: publish camera state to MQTT for automations outside HomeKit.
+# Without a url nothing connects.
+#   <topic>/<camera>         retained JSON: name, online, motion, last_motion, last_ring
+#   <topic>/<camera>/motion  "true" / "false" when motion starts or ends (not retained)
+#   <topic>/<camera>/ring    "true" once per ring (not retained)
+# <camera> is the Protect name in lower case with dashes ("Front Door" -> front-door).
+# mqtt:
+#   url: tcp://192.168.1.2:1883
+#   topic: home/protect
+#   username: ${MQTT_USERNAME}
+#   password: ${MQTT_PASSWORD}
+
 ffmpeg:
   # Path to the ffmpeg binary (default: "ffmpeg" from $PATH).
   # path: /usr/bin/ffmpeg
